@@ -50,6 +50,7 @@ class TextExtractor:
             yield self.segmentate_image(staffs[i], data[i], pred)
 
     def segmentate_image(self, staffs, img_data, region_prediction):
+
         img = np.array(Image.open(img_data.path)) / 255
         img_data.image = binarize(img)
         t_region = np.clip(region_prediction, 0, 1) * 255
@@ -58,33 +59,44 @@ class TextExtractor:
         if self.settings.erode:
             binarized = binary_erosion(binarized, structure=np.full((1, 3), 1))
 
+
         staff_image = np.zeros(img_data.image.shape)
         staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
 
         staff_img = draw_polygons(staff_polygons, staff_image)
         img_with_staffs_removed = staff_removal(staffs, 1 - binarized, 3)
+        #charheight, systemheight = vertical_runs((t_region - region_prediction) //255)
 
         processed_img = np.clip(img_with_staffs_removed + staff_img, 0, 1).astype(np.uint8)
+
         cc_list = extract_connected_components((1 - processed_img) * 255)
         cc_list_prediction = extract_connected_components(t_region - region_prediction)
         cc_list_prediction = [x for x in cc_list_prediction if len(x) > 100]
         cc_list = cc_cover(np.array(cc_list), np.array(cc_list_prediction), self.settings.cover)
         poly_dict = defaultdict(list)
-        for ccs in cc_list:
-            polys = generate_polygons_from__ccs(ccs, 2)
-            poly_dict['text'].append(polys)
+
+        with multiprocessing.Pool(processes=self.settings.processes) as p:
+            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list), total=len(cc_list))]
+
+        for poly in data:
+            poly_dict['text'].append(poly)
 
         text_image = np.zeros(img_data.image.shape)
         for _polys in poly_dict['text']:
             text_image = draw_polygons(_polys, text_image)
+
         image_with_text_removed = np.clip(img_data.image + text_image, 0, 1)
         cc_list1 = extract_connected_components(((1 - image_with_text_removed) * 255).astype(np.uint8))
         cc_list1 = [cc for cc in cc_list1 if len(cc) > 10]
         cc_list2 = extract_connected_components((staff_img * 255).astype(np.uint8))
         cc_list_cover = cc_cover(np.array(cc_list1), np.array(cc_list2), self.settings.cover, use_pred_as_start=True)
-        for ccs in cc_list_cover:
-            polys = generate_polygons_from__ccs(ccs, 2)
-            poly_dict['system'].append(polys)
+
+        with multiprocessing.Pool(processes=self.settings.processes) as p:
+            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list_cover), total=len(cc_list_cover))]
+
+        for poly in data:
+            poly_dict['system'].append(poly)
+
         if self.settings.debug:
             print('Generating debug image')
             c, ax = plt.subplots(1, 3, True, True)
@@ -101,7 +113,7 @@ class TextExtractor:
         return poly_dict
 
 
-def cc_cover(cc_list, pred_list, cover=0.1, img_width=10000, use_pred_as_start=False):
+def cc_cover(cc_list, pred_list, cover=0.9, img_width=10000, use_pred_as_start=False):
     point_list = []
     ccs_medium_height = [np.mean(cc, axis=0)[0] for cc in cc_list]
     pred_cc_medium_heights = [np.mean(cc, axis=0)[0] for cc in pred_list]
@@ -116,7 +128,7 @@ def cc_cover(cc_list, pred_list, cover=0.1, img_width=10000, use_pred_as_start=F
             pp_list.append(pred_list_array[pred_cc_indc])
         for cc_indc, cc in enumerate(cc_1d_list):
             cc_medium_height = ccs_medium_height[cc_indc]
-            if abs(cc_medium_height - pred_cc_medium_height) > 30:
+            if abs(cc_medium_height - pred_cc_medium_height) > 50:
                 continue
             C, pred_ind, cc_ind = np.intersect1d(pred_cc, cc, return_indices=True)
             if cc_ind.size != 0:
@@ -138,12 +150,12 @@ def create_data(path, line_space_height):
     return image_data
 
 
-def generate_polygons_from__ccs(cc, offset=1, alpha=15):
+def generate_polygons_from__ccs(cc, offset=2, alpha=15, tolerance=0):
     points = np.array(list(chain.from_iterable(cc)))
     edges = alpha_shape(points, alpha)
     polys = polygons(edges)
     polys = [np.flip(points[poly], axis=1) for poly in polys]
-    polys = [scale_polygon(approximate_polygon(p, 1), offset) for p in polys]
+    polys = [scale_polygon(approximate_polygon(p, tolerance), offset) for p in polys]
     return polys
 
 

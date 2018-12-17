@@ -92,9 +92,10 @@ def vertical_runs(img: np.array):
         else:
             black_runs[w - 1 - x] += 1
     black_r = np.argmax(black_runs) + 1
-    # on pages with a lot of text the staffspaceheigth can be falsified.
+    # on pages with a lot of text the staffspaceheight can be falsified.
     # --> skip the first elements of the array
-    white_r = np.argmax(white_runs[black_r:]) + 1 + black_r
+    white_r = np.argmax(white_runs) + 1
+
     img = np.transpose(img)
     return white_r, black_r
 
