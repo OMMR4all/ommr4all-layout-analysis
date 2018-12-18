@@ -17,6 +17,8 @@ import multiprocessing
 import tqdm
 from functools import partial
 import itertools as IT
+from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
+
 
 @dataclass
 class TextExtractionSettings:
@@ -46,8 +48,66 @@ class TextExtractor:
         create_data_partital = partial(create_data, line_space_height=self.settings.lineSpaceHeight)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(create_data_partital, img_paths), total=len(img_paths))]
-        for i, pred in enumerate(self.predictor.predict(data)):
-            yield self.segmentate_image(staffs[i], data[i], pred)
+        if self.settings.model:
+            for i, pred in enumerate(self.predictor.predict(data)):
+                yield self.segmentate_image(staffs[i], data[i], pred)
+        else:
+            for i_ind, i in enumerate(zip(staffs, data)):
+                yield self.segmentate_basic(i[0], i[1])
+
+    def segmentate_basic(self, staffs, img_data):
+        poly_dict = defaultdict(list)
+
+        img = np.array(Image.open(img_data.path)) / 255
+        img_data.image = binarize(img)
+        binarized = 1 - img_data.image
+        if self.settings.erode:
+            binarized = binary_erosion(binarized, structure=np.full((1, 3), 1))
+        staff_image = np.zeros(img_data.image.shape)
+        staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
+        staff_img = draw_polygons(staff_polygons, staff_image)
+        staff_cc = extract_connected_components((staff_img * 255).astype(np.uint8))
+
+
+        rmin, rmax, cmin, cmax = bbox2(staff_img)
+        rmin = rmin - rmin // 10
+        rmax = rmax + (staff_img.shape[0] - rmax) // 10
+        cmin = cmin - cmin // 10
+        cmax = cmax + (staff_img.shape[1] - cmax) // 10
+
+        bbox = img_data.image[rmin:rmax, cmin:cmax]
+        processed_image = np.ones(img_data.image.shape)
+        processed_image[rmin:rmax, cmin:cmax] = bbox
+        cc_list = extract_connected_components(( (1- processed_image) * 255).astype(np.uint8))
+        cc_list_cover = cc_cover(np.array(cc_list), np.array(staff_cc), self.settings.cover, use_pred_as_start=True)
+        with multiprocessing.Pool(processes=self.settings.processes) as p:
+            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list_cover), total=len(cc_list_cover))]
+        for poly in data:
+            poly_dict['system'].append(poly)
+        text_image = np.zeros(img_data.image.shape)
+        for _polys in data:
+            text_image = draw_polygons(_polys, text_image)
+
+        processed_image = np.clip(processed_image + text_image, 0, 1)
+        processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
+        processed_image_cc = [cc for cc in processed_image_cc if len(cc) > 10]
+        data = generate_polygons_from__ccs(processed_image_cc)
+        poly_dict['text'].append(data)
+        if self.settings.debug:
+            print('Generating debug image')
+            c, ax = plt.subplots(1, 3, True, True)
+            ax[0].imshow(img_data.image)
+            for _poly in poly_dict['text']:
+                for z in _poly:
+                    ax[0].plot(z[:, 0], z[:, 1])
+            for _poly in poly_dict['system']:
+                for z in _poly:
+                    ax[0].plot(z[:, 0], z[:, 1])
+            ax[1].imshow(staff_img)
+            ax[2].imshow(text_image)
+            plt.show()
+        return poly_dict
+
 
     def segmentate_image(self, staffs, img_data, region_prediction):
 
@@ -140,6 +200,21 @@ def cc_cover(cc_list, pred_list, cover=0.9, img_width=10000, use_pred_as_start=F
         if len(pp_list) > 0:
             point_list.append(pp_list)
     return point_list
+
+
+def bbox1(img):
+    a = np.where(img != 0)
+    bbox = np.min(a[0]), np.max(a[0]), np.min(a[1]), np.max(a[1])
+    return bbox
+
+
+def bbox2(img):
+    rows = np.any(img, axis=1)
+    cols = np.any(img, axis=0)
+    rmin, rmax = np.where(rows)[0][[0, -1]]
+    cmin, cmax = np.where(cols)[0][[0, -1]]
+
+    return rmin, rmax, cmin, cmax
 
 
 def create_data(path, line_space_height):
@@ -314,13 +389,14 @@ def alpha_shape(points, alpha, only_outer=True):
     return edges
 
 
+
+
 if __name__ == "__main__":
     import os
     import pickle
-    from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
     from layoutanalysis.preprocessing.preprocessingUtil import vertical_runs
 
-    text_extractor_settings = TextExtractionSettings(debug=True, cover=0.01, erode=True,
+    text_extractor_settings = TextExtractionSettings(debug=True, cover=0.3, erode=True,
                                                      model='/home/alexanderh/Schreibtisch/git/data/models/' \
                                                        'textprediction_interesting/model2')
     _path = '/home/alexanderh/Schreibtisch/masterarbeit/OMR/Graduel_de_leglise_de_Nevers/interesting/' \
@@ -328,6 +404,8 @@ if __name__ == "__main__":
     with open('/home/alexanderh/Schreibtisch/git/data/staffs/staffs_data509.pickle', 'rb') as f:
         _staffs = pickle.load(f)
     text_extractor = TextExtractor(text_extractor_settings)
-    for _ in text_extractor.segmentate([_staffs], [_path]):
-        pass
+    image_data = create_data(_path, 20)
+    text_extractor.segmentate_basic(_staffs, image_data)
+    #for _ in text_extractor.segmentate([_staffs], [_path]):
+    #    pass
 
