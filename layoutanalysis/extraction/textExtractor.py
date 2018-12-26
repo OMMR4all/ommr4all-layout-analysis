@@ -36,6 +36,7 @@ class TextExtractor:
         self.predictor = None
         self.settings = settings
         if self.settings.model:
+            import os
             pcsettings = PredictSettings(
                 mode='meta',
                 network=os.path.abspath(self.settings.model),
@@ -62,7 +63,7 @@ class TextExtractor:
         img_data.image = binarize(img)
         binarized = 1 - img_data.image
         if self.settings.erode:
-            binarized = binary_erosion(binarized, structure=np.full((1, 3), 1))
+            img_data.image = binary_dilation(img_data.image, structure=np.full((1, 3), 1))
         staff_image = np.zeros(img_data.image.shape)
         staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
         staff_img = draw_polygons(staff_polygons, staff_image)
@@ -392,20 +393,19 @@ def alpha_shape(points, alpha, only_outer=True):
 
 
 if __name__ == "__main__":
-    import os
     import pickle
+    import os
     from layoutanalysis.preprocessing.preprocessingUtil import vertical_runs
 
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    model_path = os.path.join(project_dir, 'demo/models/model')
+    page_path = os.path.join(project_dir, 'demo/images/Graduel_de_leglise_de_Nevers-509.nrm.png')
+    staff_path = os.path.join(project_dir, 'demo/staffs/Graduel_de_leglise_de_Nevers-509.staffs')
     text_extractor_settings = TextExtractionSettings(debug=True, cover=0.3, erode=True,
-                                                     model='/home/alexanderh/Schreibtisch/git/data/models/' \
-                                                       'textprediction_interesting/model2')
-    _path = '/home/alexanderh/Schreibtisch/masterarbeit/OMR/Graduel_de_leglise_de_Nevers/interesting/' \
-           'part2/bin/Graduel_de_leglise_de_Nevers-509.nrm.png'
-    with open('/home/alexanderh/Schreibtisch/git/data/staffs/staffs_data509.pickle', 'rb') as f:
+                                                     model=model_path)
+    with open(staff_path, 'rb') as f:
         _staffs = pickle.load(f)
     text_extractor = TextExtractor(text_extractor_settings)
-    image_data = create_data(_path, 20)
-    text_extractor.segmentate_basic(_staffs, image_data)
-    #for _ in text_extractor.segmentate([_staffs], [_path]):
-    #    pass
+    for _ in text_extractor.segmentate([_staffs], [page_path]):
+        pass
 
