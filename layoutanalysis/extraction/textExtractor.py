@@ -4,6 +4,7 @@ from layoutanalysis.removal.dummy_staff_line_removal import staff_removal
 from layoutanalysis.preprocessing.preprocessingUtil import extract_connected_components, convert_2darray_to_1darray
 from PIL import Image
 import matplotlib.pyplot as plt
+import matplotlib.path as mpltPath
 from itertools import chain
 from scipy.spatial import Delaunay
 import numpy as np
@@ -69,7 +70,6 @@ class TextExtractor:
         staff_img = draw_polygons(staff_polygons, staff_image)
         staff_cc = extract_connected_components((staff_img * 255).astype(np.uint8))
 
-
         rmin, rmax, cmin, cmax = bbox2(staff_img)
         rmin = rmin - rmin // 10
         rmax = rmax + (staff_img.shape[0] - rmax) // 10
@@ -79,7 +79,7 @@ class TextExtractor:
         bbox = img_data.image[rmin:rmax, cmin:cmax]
         processed_image = np.ones(img_data.image.shape)
         processed_image[rmin:rmax, cmin:cmax] = bbox
-        cc_list = extract_connected_components(( (1- processed_image) * 255).astype(np.uint8))
+        cc_list = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
         cc_list_cover = cc_cover(np.array(cc_list), np.array(staff_cc), self.settings.cover, use_pred_as_start=True)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list_cover), total=len(cc_list_cover))]
@@ -138,13 +138,24 @@ class TextExtractor:
 
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list), total=len(cc_list))]
+        text_polygons = []
+        for lpoly in data:
+            for cpoly in lpoly:
+                text_polygons.append(cpoly)
+        polys_to_remove = []
+        for i_1, poly in enumerate(text_polygons):
+            for i_2, poly2 in enumerate(text_polygons):
+                if i_1 != i_2:
+                    if check_polygon_within_polygon(poly, poly2):
+                        polys_to_remove.append(i_1)
+        for i in reversed(polys_to_remove):
+            del text_polygons[i]
 
-        for poly in data:
+        for poly in text_polygons:
             poly_dict['text'].append(poly)
 
         text_image = np.zeros(img_data.image.shape)
-        for _polys in poly_dict['text']:
-            text_image = draw_polygons(_polys, text_image)
+        text_image = draw_polygons(poly_dict['text'], text_image)
 
         image_with_text_removed = np.clip(img_data.image + text_image, 0, 1)
         cc_list1 = extract_connected_components(((1 - image_with_text_removed) * 255).astype(np.uint8))
@@ -154,20 +165,29 @@ class TextExtractor:
 
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list_cover), total=len(cc_list_cover))]
-
-        for poly in data:
-            poly_dict['system'].append(poly)
+        system_polygons = []
+        for lpoly in data:
+            for cpoly in lpoly:
+                system_polygons.append(cpoly)
+        system_polys_to_remove = []
+        for i_1, poly in enumerate(system_polygons):
+            for i_2, poly2 in enumerate(system_polygons):
+                if i_1 != i_2:
+                    if check_polygon_within_polygon(poly, poly2):
+                        system_polys_to_remove.append(i_1)
+        for i in reversed(system_polys_to_remove):
+            del system_polygons[i]
+        for poly in system_polygons:
+            poly_dict['text'].append(poly)
 
         if self.settings.debug:
             print('Generating debug image')
             c, ax = plt.subplots(1, 3, True, True)
             ax[0].imshow(img_data.image)
             for _poly in poly_dict['text']:
-                for z in _poly:
-                    ax[0].plot(z[:, 0], z[:, 1])
+                ax[0].plot(_poly[:, 0], _poly[:, 1])
             for _poly in poly_dict['system']:
-                for z in _poly:
-                    ax[0].plot(z[:, 0], z[:, 1])
+                ax[0].plot(_poly[:, 0], _poly[:, 1])
             ax[1].imshow(staff_img)
             ax[2].imshow(text_image)
             plt.show()
@@ -226,7 +246,7 @@ def create_data(path, line_space_height):
     return image_data
 
 
-def generate_polygons_from__ccs(cc, offset=2, alpha=15, tolerance=0):
+def generate_polygons_from__ccs(cc, offset=2, alpha=15, tolerance=5):
     points = np.array(list(chain.from_iterable(cc)))
     edges = alpha_shape(points, alpha)
     polys = polygons(edges)
@@ -390,6 +410,78 @@ def alpha_shape(points, alpha, only_outer=True):
     return edges
 
 
+def check_polygon_within_polygon(poly1, poly2):
+    def inside_polygon(x, y, points):
+        """
+        Return True if a coordinate (x, y) is inside a polygon defined by
+        a list of verticies [(x1, y1), (x2, x2), ... , (xN, yN)].
+
+        Reference: http://www.ariel.com.au/a/python-point-int-poly.html
+        """
+        n = len(points)
+        inside = False
+        p1x, p1y = points[0]
+        for i in range(1, n + 1):
+            p2x, p2y = points[i % n]
+            if y > min(p1y, p2y):
+                if y <= max(p1y, p2y):
+                    if x <= max(p1x, p2x):
+                        if p1y != p2y:
+                            xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                        if p1x == p2x or x <= xinters:
+                            inside = not inside
+            p1x, p1y = p2x, p2y
+        return inside
+
+    t = check_polygon_intersection(poly1, poly2)
+    if not t:
+        path = mpltPath.Path(poly2)
+        inside = path.contains_point([poly1[0][0], poly1[0][1]])
+        if inside:
+            return True
+        #if inside_polygon(poly1[0][0], poly1[0][1], poly2):
+        #    return True
+    return False
+
+
+def check_polygon_intersection(p1, p2):
+
+    def check_line_intersects_polygon(l1, p2):
+        for t in range(len(p2)-1):
+            if check_for_intersection(l1, [p2[t], p2[t+1]]):
+                return True
+
+        return False
+    intersection = False
+    for i in range(len(p1)-1):
+        if check_line_intersects_polygon([p1[i], p1[i+1]], p2):
+            intersection = True
+            break
+
+    return intersection
+
+
+def check_for_intersection(l1, l2):
+    p1 = l1[0]
+    p2 = l1[1]
+    p3 = l2[0]
+    p4 = l2[1]
+    x1, y1 = p1[0], p1[1]
+    x2, y2 = p2[0], p2[1]
+    x3, y3 = p3[0], p3[1]
+    x4, y4 = p4[0], p4[1]
+
+    denominator = (x1 - x2)*(y3 - y4) - (y1 - y2)*(x3 - x4)
+    if denominator == 0:
+        return False
+    t = ((x1 - x3)*(y3 - y4) - (y1 - y3)*(x3 - x4)) / denominator
+    u = -(((x1-x2)*(y1 - y3) - (y1-y2)*(x1-x3)) / denominator)
+    if 0 <= u <= 1 and 0 <= t <= 1:
+        return True
+
+    #px = x1 + t*(x2 - x1)
+    #py = y1 + t*(y2 - y1)
+    return False
 
 
 if __name__ == "__main__":
@@ -408,4 +500,3 @@ if __name__ == "__main__":
     text_extractor = TextExtractor(text_extractor_settings)
     for _ in text_extractor.segmentate([_staffs], [page_path]):
         pass
-
