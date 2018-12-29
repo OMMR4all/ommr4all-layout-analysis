@@ -11,15 +11,14 @@ import numpy as np
 from scipy.ndimage.morphology import binary_erosion, binary_dilation
 from layoutanalysis.datatypes.datatypes import ImageData
 from dataclasses import dataclass
-from skimage.measure import approximate_polygon
 from collections import defaultdict
 from skimage.draw import polygon
 import multiprocessing
 import tqdm
 from functools import partial
-import itertools as IT
 from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
-
+from shapely.geometry import Polygon
+from shapely import affinity
 
 @dataclass
 class TextExtractionSettings:
@@ -83,32 +82,55 @@ class TextExtractor:
         cc_list_cover = cc_cover(np.array(cc_list), np.array(staff_cc), self.settings.cover, use_pred_as_start=True)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list_cover), total=len(cc_list_cover))]
-        for poly in data:
+        system_polygons = [poly for p_data in data for poly in p_data]
+
+        polys_to_remove = []
+        for ind1, poly in enumerate(system_polygons):
+            for ind2, poly2 in enumerate(system_polygons):
+                if ind1 != ind2:
+                    if poly.contains(poly2):
+                        polys_to_remove.append(ind2)
+
+        for ind in reversed(polys_to_remove):
+            del system_polygons[ind]
+        for poly in system_polygons:
             poly_dict['system'].append(poly)
+
         text_image = np.zeros(img_data.image.shape)
-        for _polys in data:
-            text_image = draw_polygons(_polys, text_image)
+        text_image = draw_polygons(poly_dict['system'], text_image)
 
         processed_image = np.clip(processed_image + text_image, 0, 1)
         processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
         processed_image_cc = [cc for cc in processed_image_cc if len(cc) > 10]
         data = generate_polygons_from__ccs(processed_image_cc)
-        poly_dict['text'].append(data)
+        text_polygons = [poly for poly in data]
+
+        polys_to_remove = []
+        for ind1, poly in enumerate(text_polygons):
+            for ind2, poly2 in enumerate(text_polygons):
+                if ind1 != ind2:
+                    if poly.contains(poly2):
+                        polys_to_remove.append(ind2)
+
+        for ind in reversed(polys_to_remove):
+            del text_polygons[ind]
+        for poly in text_polygons:
+            poly_dict['text'].append(poly)
+
         if self.settings.debug:
             print('Generating debug image')
             c, ax = plt.subplots(1, 3, True, True)
             ax[0].imshow(img_data.image)
             for _poly in poly_dict['text']:
-                for z in _poly:
-                    ax[0].plot(z[:, 0], z[:, 1])
+                x, y = _poly.exterior.xy
+                ax[0].plot(x, y)
             for _poly in poly_dict['system']:
-                for z in _poly:
-                    ax[0].plot(z[:, 0], z[:, 1])
+                x, y = _poly.exterior.xy
+                ax[0].plot(x, y)
             ax[1].imshow(staff_img)
             ax[2].imshow(text_image)
             plt.show()
         return poly_dict
-
 
     def segmentate_image(self, staffs, img_data, region_prediction):
 
@@ -119,7 +141,6 @@ class TextExtractor:
         binarized = 1 - img_data.image
         if self.settings.erode:
             binarized = binary_erosion(binarized, structure=np.full((1, 3), 1))
-
 
         staff_image = np.zeros(img_data.image.shape)
         staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
@@ -138,19 +159,18 @@ class TextExtractor:
 
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list), total=len(cc_list))]
-        text_polygons = []
-        for lpoly in data:
-            for cpoly in lpoly:
-                text_polygons.append(cpoly)
-        polys_to_remove = []
-        for i_1, poly in enumerate(text_polygons):
-            for i_2, poly2 in enumerate(text_polygons):
-                if i_1 != i_2:
-                    if check_polygon_within_polygon(poly, poly2):
-                        polys_to_remove.append(i_1)
-        for i in reversed(polys_to_remove):
-            del text_polygons[i]
 
+        text_polygons = [poly for p_data in data for poly in p_data]
+
+        polys_to_remove = []
+        for ind1, poly in enumerate(text_polygons):
+            for ind2, poly2 in enumerate(text_polygons):
+                if ind1 != ind2:
+                    if poly.contains(poly2):
+                        polys_to_remove.append(ind2)
+
+        for ind in reversed(polys_to_remove):
+            del text_polygons[ind]
         for poly in text_polygons:
             poly_dict['text'].append(poly)
 
@@ -165,18 +185,18 @@ class TextExtractor:
 
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list_cover), total=len(cc_list_cover))]
-        system_polygons = []
-        for lpoly in data:
-            for cpoly in lpoly:
-                system_polygons.append(cpoly)
-        system_polys_to_remove = []
-        for i_1, poly in enumerate(system_polygons):
-            for i_2, poly2 in enumerate(system_polygons):
-                if i_1 != i_2:
-                    if check_polygon_within_polygon(poly, poly2):
-                        system_polys_to_remove.append(i_1)
-        for i in reversed(system_polys_to_remove):
-            del system_polygons[i]
+        system_polygons = [poly for p_data in data for poly in p_data]
+
+        polys_to_remove = []
+        for ind1, poly in enumerate(system_polygons):
+            for ind2, poly2 in enumerate(system_polygons):
+                if ind1 != ind2:
+                    if poly.contains(poly2):
+                        polys_to_remove.append(ind2)
+
+        for ind in reversed(polys_to_remove):
+            del system_polygons[ind]
+
         for poly in system_polygons:
             poly_dict['text'].append(poly)
 
@@ -185,10 +205,12 @@ class TextExtractor:
             c, ax = plt.subplots(1, 3, True, True)
             ax[0].imshow(img_data.image)
             for _poly in poly_dict['text']:
-                ax[0].plot(_poly[:, 0], _poly[:, 1])
+                x, y = _poly.exterior.xy
+                ax[0].plot(x, y)
             for _poly in poly_dict['system']:
-                ax[0].plot(_poly[:, 0], _poly[:, 1])
-            ax[1].imshow(staff_img)
+                x, y = _poly.exterior.xy
+                ax[0].plot(x, y)
+            ax[1].imshow(t_region - region_prediction)
             ax[2].imshow(text_image)
             plt.show()
         return poly_dict
@@ -246,13 +268,18 @@ def create_data(path, line_space_height):
     return image_data
 
 
-def generate_polygons_from__ccs(cc, offset=2, alpha=15, tolerance=5):
+def generate_polygons_from__ccs(cc, alpha=15, xscale=1.001, yscale=1.2):
     points = np.array(list(chain.from_iterable(cc)))
     edges = alpha_shape(points, alpha)
     polys = polygons(edges)
     polys = [np.flip(points[poly], axis=1) for poly in polys]
-    polys = [scale_polygon(approximate_polygon(p, tolerance), offset) for p in polys]
-    return polys
+    polygons_paths = []
+    for poly in polys:
+        poly = Polygon(poly)
+        poly = poly.simplify(0.8)
+        poly = affinity.scale(poly, xscale, yscale, origin='centroid')
+        polygons_paths.append(poly)
+    return polygons_paths
 
 
 def generate_polygon_from_staff(staff):
@@ -262,61 +289,15 @@ def generate_polygon_from_staff(staff):
     _polygon = first_line + last_line
     y, x = zip(*_polygon)
     _polygon = list(zip(x, y))
-    return _polygon
+    return Polygon(_polygon)
 
 
 def draw_polygons(_polygons, polygon_img):
     for _poly in _polygons:
-        x, y = zip(*_poly)
+        x, y = _poly.exterior.xy
         rr, cc = polygon(y, x)
         polygon_img[rr, cc] = 1
     return polygon_img
-
-
-def scale_polygon(p_path,offset):
-    center = centroid_of_polygon(p_path)
-    for i in p_path:
-        if i[0] > center[0]:
-            i[0] += offset
-        else:
-            i[0] -= offset
-        if i[1] > center[1]:
-            i[1] += offset
-        else:
-            i[1] -= offset
-    return p_path
-
-
-def area_of_polygon(x, y):
-    """Calculates the signed area of an arbitrary polygon given its verticies
-    http://stackoverflow.com/a/4682656/190597 (Joe Kington)
-    http://softsurfer.com/Archive/algorithm_0101/algorithm_0101.htm#2D%20Polygons
-    """
-    area = 0.0
-    for i in range(-1, len(x) - 1):
-        area += x[i] * (y[i + 1] - y[i - 1])
-    return area / 2.0
-
-
-def centroid_of_polygon(points):
-    """
-    http://stackoverflow.com/a/14115494/190597 (mgamba)
-    """
-    area = area_of_polygon(*zip(*points))
-    result_x = 0
-    result_y = 0
-    N = len(points)
-    points = IT.cycle(points)
-    x1, y1 = next(points)
-    for i in range(N):
-        x0, y0 = x1, y1
-        x1, y1 = next(points)
-        cross = (x0 * y1) - (x1 * y0)
-        result_x += (x0 + x1) * cross
-        result_y += (y0 + y1) * cross
-    result_x /= (area * 6.0)
-    result_y /= (area * 6.0)
-    return (result_x, result_y)
 
 
 def polygons(edges):
@@ -493,8 +474,8 @@ if __name__ == "__main__":
     model_path = os.path.join(project_dir, 'demo/models/model')
     page_path = os.path.join(project_dir, 'demo/images/Graduel_de_leglise_de_Nevers-509.nrm.png')
     staff_path = os.path.join(project_dir, 'demo/staffs/Graduel_de_leglise_de_Nevers-509.staffs')
-    text_extractor_settings = TextExtractionSettings(debug=True, cover=0.3, erode=True,
-                                                     model=model_path)
+    text_extractor_settings = TextExtractionSettings(debug=True, cover=0.3, erode=True)\
+     #   ,                                                     model=model_path)
     with open(staff_path, 'rb') as f:
         _staffs = pickle.load(f)
     text_extractor = TextExtractor(text_extractor_settings)

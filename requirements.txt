@@ -7,3 +7,4 @@ opencv-python
 dataclasses
 pillow
 matplotlib
+shapely
