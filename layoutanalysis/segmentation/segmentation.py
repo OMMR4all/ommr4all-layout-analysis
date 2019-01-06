@@ -23,7 +23,7 @@ from scipy.ndimage.filters import convolve1d
 
 
 @dataclass
-class TextExtractionSettings:
+class SegmentationSettings:
     erode: bool = False
     debug: bool = False
     lineSpaceHeight: int = 20
@@ -33,8 +33,8 @@ class TextExtractionSettings:
     processes: int = 12
 
 
-class TextExtractor:
-    def __init__(self, settings: TextExtractionSettings):
+class Segmentator:
+    def __init__(self, settings: SegmentationSettings):
         self.predictor = None
         self.settings = settings
         if self.settings.model:
@@ -137,7 +137,6 @@ class TextExtractor:
             ax[2].imshow(text_image)
             plt.show()
         return poly_dict
-
 
     def segmentate_with_weight_image(self, staffs, img_data):
         from scipy.ndimage import gaussian_filter
@@ -628,10 +627,10 @@ if __name__ == "__main__":
     model_path = os.path.join(project_dir, 'demo/models/model')
     page_path = os.path.join(project_dir, 'demo/images/Graduel_de_leglise_de_Nevers-509.nrm.png')
     staff_path = os.path.join(project_dir, 'demo/staffs/Graduel_de_leglise_de_Nevers-509.staffs')
-    text_extractor_settings = TextExtractionSettings(debug=True, cover=0.3, erode=False)\
+    text_extractor_settings = SegmentationSettings(debug=True, cover=0.3, erode=False)\
      #   ,                                                     model=model_path)
     with open(staff_path, 'rb') as f:
         _staffs = pickle.load(f)
-    text_extractor = TextExtractor(text_extractor_settings)
+    text_extractor = Segmentator(text_extractor_settings)
     for _ in text_extractor.segmentate([_staffs], [page_path]):
         pass
