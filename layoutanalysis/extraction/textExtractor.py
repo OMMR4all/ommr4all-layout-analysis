@@ -19,6 +19,8 @@ from functools import partial
 from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
 from shapely.geometry import Polygon
 from shapely import affinity
+from scipy.ndimage.filters import convolve1d
+
 
 @dataclass
 class TextExtractionSettings:
@@ -54,9 +56,10 @@ class TextExtractor:
                 yield self.segmentate_image(staffs[i], data[i], pred)
         else:
             for i_ind, i in enumerate(zip(staffs, data)):
-                yield self.segmentate_basic(i[0], i[1])
+                yield self.segmentate_with_weight_image(i[0], i[1])
 
     def segmentate_basic(self, staffs, img_data):
+
         poly_dict = defaultdict(list)
 
         img = np.array(Image.open(img_data.path)) / 255
@@ -71,17 +74,20 @@ class TextExtractor:
 
         rmin, rmax, cmin, cmax = bbox2(staff_img)
         rmin = rmin - rmin // 10
-        rmax = rmax + (staff_img.shape[0] - rmax) // 10
+        rmax = rmax + (staff_img.shape[0] - rmax) // 5
         cmin = cmin - cmin // 10
-        cmax = cmax + (staff_img.shape[1] - cmax) // 10
+        cmax = cmax + (staff_img.shape[1] - cmax) // 5
 
         bbox = img_data.image[rmin:rmax, cmin:cmax]
         processed_image = np.ones(img_data.image.shape)
         processed_image[rmin:rmax, cmin:cmax] = bbox
+        processed_image = staff_removal(staffs, processed_image, 3)
+
         cc_list = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
         cc_list_cover = cc_cover(np.array(cc_list), np.array(staff_cc), self.settings.cover, use_pred_as_start=True)
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
-            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list_cover), total=len(cc_list_cover))]
+            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list_cover), total=len(cc_list_cover))]
         system_polygons = [poly for p_data in data for poly in p_data]
 
         polys_to_remove = []
@@ -132,6 +138,144 @@ class TextExtractor:
             plt.show()
         return poly_dict
 
+
+    def segmentate_with_weight_image(self, staffs, img_data):
+        from scipy.ndimage import gaussian_filter
+        poly_dict = defaultdict(list)
+
+        img = np.array(Image.open(img_data.path)) / 255
+        img_data.image = binarize(img)
+        binarized = 1 - img_data.image
+        if self.settings.erode:
+            img_data.image = binary_dilation(img_data.image, structure=np.full((1, 3), 1))
+        staff_image = np.zeros(img_data.image.shape)
+
+
+        staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
+        distance = []
+        for x in range(len(staff_polygons)-1):
+            distance.append(staff_polygons[x].distance(staff_polygons[x+1]))
+
+        staff_img = draw_polygons(staff_polygons, staff_image)
+        weight = gaussian_filter(staff_img, sigma=(np.average(distance) /4, np.average(distance) * 3 / 4))
+        #weight = box_blur(staff_img, 130, 48)
+        weight = np.clip(weight * 2, 0, 1) * 255 - 125
+
+        rmin, rmax, cmin, cmax = bbox2(staff_img)
+        rmin = rmin - rmin // 10
+        rmax = rmax + (staff_img.shape[0] - rmax) // 5
+        cmin = cmin - cmin // 10
+        cmax = cmax + (staff_img.shape[1] - cmax) // 5
+
+        bbox = img_data.image[rmin:rmax, cmin:cmax]
+        processed_image = np.ones(img_data.image.shape)
+        processed_image[rmin:rmax, cmin:cmax] = bbox
+        processed_image = staff_removal(staffs, processed_image, 3)
+
+        cc_list = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
+
+        def get_cc(cc_list, weight_matrix):
+            cc_list_new = []
+            for cc in cc_list:
+                y, x = zip(*cc)
+                if np.sum(weight_matrix[y, x]) > 0:
+                    cc_list_new.append(cc)
+            return cc_list_new
+
+
+        cc_list= get_cc(cc_list, weight)
+        if self.settings.debug:
+            print('Generating debug image')
+
+            def visulize_cc_list(cc_list, img_shape):
+                cc_image = np.ones(img_shape)
+                for cc in cc_list:
+                    y, x = zip(*cc)
+                    cc_image[y, x] = 0
+                return cc_image
+
+            z, ax = plt.subplots(1, 4, True, True)
+            ax[0].imshow(weight)
+            ax[1].imshow(staff_img)
+            ax[2].imshow(visulize_cc_list(cc_list, img_data.image.shape))
+            ax[3].imshow(img_data.image)
+            plt.show()
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
+
+        def divide_ccs_into_groups(cc_list, staffs):
+            import math
+            cc_list_height = [cc[-1][0]+ cc[0][0] for cc in cc_list]
+            staffs_height = [staff[0][0][0] + staff[-1][0][0] for staff in staffs]
+            d = defaultdict(list)
+            for cc_ind, cc in enumerate(cc_list_height):
+                r = math.inf
+                r_ind = - 1
+                for index, staff in enumerate(staffs_height):
+                    if abs(cc - staff) < r:
+                        r = abs(cc - staff)
+                        r_ind = index
+                d[r_ind].append(cc_list[cc_ind])
+
+            ## add staff lines to groups
+            for r_ind, staff in enumerate(staffs):
+                for cc in staff:
+                    d[r_ind].append(cc)
+            return d.values()
+
+
+        cc_list = divide_ccs_into_groups(cc_list, staffs)
+        with multiprocessing.Pool(processes=self.settings.processes) as p:
+            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list), total=len(cc_list))]
+        #system_polygons = generate_polygons_from__ccs_partial(cc_list, yscale = 1.03)
+        system_polygons = [poly for p_data in data for poly in p_data]
+
+        polys_to_remove = []
+        for ind1, poly in enumerate(system_polygons):
+            for ind2, poly2 in enumerate(system_polygons):
+                if ind1 != ind2:
+                    if poly.contains(poly2):
+                        polys_to_remove.append(ind2)
+
+        for ind in reversed(polys_to_remove):
+            del system_polygons[ind]
+        for poly in system_polygons:
+            poly_dict['system'].append(poly)
+
+        text_image = np.zeros(img_data.image.shape)
+        text_image = draw_polygons(poly_dict['system'], text_image)
+
+        processed_image = np.clip(processed_image + text_image, 0, 1)
+        processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
+        processed_image_cc = [cc for cc in processed_image_cc if len(cc) > 10]
+        data = generate_polygons_from__ccs(processed_image_cc)
+        text_polygons = [poly for poly in data]
+
+        polys_to_remove = []
+        for ind1, poly in enumerate(text_polygons):
+            for ind2, poly2 in enumerate(text_polygons):
+                if ind1 != ind2:
+                    if poly.contains(poly2):
+                        polys_to_remove.append(ind2)
+
+        for ind in reversed(polys_to_remove):
+            del text_polygons[ind]
+        for poly in text_polygons:
+            poly_dict['text'].append(poly)
+        if self.settings.debug:
+            print('Generating debug image')
+            c, ax = plt.subplots(1, 3, True, True)
+            ax[0].imshow(img_data.image)
+            for _poly in poly_dict['text']:
+                x, y = _poly.exterior.xy
+                ax[0].plot(x, y)
+            for _poly in poly_dict['system']:
+                x, y = _poly.exterior.xy
+                ax[0].plot(x, y)
+            ax[1].imshow(staff_img)
+            ax[2].imshow(text_image)
+            plt.show()
+        return poly_dict
+
     def segmentate_image(self, staffs, img_data, region_prediction):
 
         img = np.array(Image.open(img_data.path)) / 255
@@ -150,7 +294,6 @@ class TextExtractor:
         #charheight, systemheight = vertical_runs((t_region - region_prediction) //255)
 
         processed_img = np.clip(img_with_staffs_removed + staff_img, 0, 1).astype(np.uint8)
-
         cc_list = extract_connected_components((1 - processed_img) * 255)
         cc_list_prediction = extract_connected_components(t_region - region_prediction)
         cc_list_prediction = [x for x in cc_list_prediction if len(x) > 100]
@@ -183,8 +326,9 @@ class TextExtractor:
         cc_list2 = extract_connected_components((staff_img * 255).astype(np.uint8))
         cc_list_cover = cc_cover(np.array(cc_list1), np.array(cc_list2), self.settings.cover, use_pred_as_start=True)
 
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
-            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs, cc_list_cover), total=len(cc_list_cover))]
+            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list_cover), total=len(cc_list_cover))]
         system_polygons = [poly for p_data in data for poly in p_data]
 
         polys_to_remove = []
@@ -198,7 +342,7 @@ class TextExtractor:
             del system_polygons[ind]
 
         for poly in system_polygons:
-            poly_dict['text'].append(poly)
+            poly_dict['system'].append(poly)
 
         if self.settings.debug:
             print('Generating debug image')
@@ -268,7 +412,7 @@ def create_data(path, line_space_height):
     return image_data
 
 
-def generate_polygons_from__ccs(cc, alpha=15, xscale=1.001, yscale=1.2):
+def generate_polygons_from__ccs(cc, alpha=15, xscale=1.001, yscale=1.1):
     points = np.array(list(chain.from_iterable(cc)))
     edges = alpha_shape(points, alpha)
     polys = polygons(edges)
@@ -284,10 +428,14 @@ def generate_polygons_from__ccs(cc, alpha=15, xscale=1.001, yscale=1.2):
 
 def generate_polygon_from_staff(staff):
     first_line = staff[0]
+    first_line[0][1] = first_line[0][1] + -5
+
     last_line = staff[-1]
+    last_line[0][1] = last_line[0][1] + -5
     last_line.reverse()
     _polygon = first_line + last_line
     y, x = zip(*_polygon)
+
     _polygon = list(zip(x, y))
     return Polygon(_polygon)
 
@@ -464,6 +612,12 @@ def check_for_intersection(l1, l2):
     #py = y1 + t*(y2 - y1)
     return False
 
+def box_blur(img, radiusc, radiusr):
+    filterr = np.ones((radiusr) * 1) / radiusr
+    filterc = np.ones((radiusc) * 1) / radiusc
+    image = convolve1d(img, filterr, axis = 0)
+    image = convolve1d(image, filterc, axis = 1)
+    return image
 
 if __name__ == "__main__":
     import pickle
@@ -474,7 +628,7 @@ if __name__ == "__main__":
     model_path = os.path.join(project_dir, 'demo/models/model')
     page_path = os.path.join(project_dir, 'demo/images/Graduel_de_leglise_de_Nevers-509.nrm.png')
     staff_path = os.path.join(project_dir, 'demo/staffs/Graduel_de_leglise_de_Nevers-509.staffs')
-    text_extractor_settings = TextExtractionSettings(debug=True, cover=0.3, erode=True)\
+    text_extractor_settings = TextExtractionSettings(debug=True, cover=0.3, erode=False)\
      #   ,                                                     model=model_path)
     with open(staff_path, 'rb') as f:
         _staffs = pickle.load(f)
