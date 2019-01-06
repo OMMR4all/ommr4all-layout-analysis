@@ -1,10 +1,10 @@
 import cv2
-import operator
 from collections import defaultdict
 import numpy as np
 import peakutils
 from scipy.signal import medfilt2d
 from itertools import tee
+
 
 def extract_connected_components(image):
     connectivity = 8
@@ -16,9 +16,11 @@ def extract_connected_components(image):
         y_coord, x_coord = p[0], p[1]
         k = output[1][y_coord][x_coord]
         ccdict[k].append([y_coord, x_coord])
-    cc_list = list(ccdict.values())
-    [x.sort(key=operator.itemgetter(1)) for x in cc_list]
-    return cc_list
+    cc_list = [ccdict[k] for k in sorted(ccdict.keys())]
+    # skip first element of centroid and stats, since it is information related to the image. Not to cc
+    labels = output[2][1:]
+    centroids = output[3][1:]
+    return cc_list, labels, centroids
 
 
 def normalize_connected_components(cc_list):
@@ -119,4 +121,4 @@ def calculate_horizontal_runs(img: np.array, min_length: int):
 
 if __name__ == "__main__":
     l = np.array([[1,2],[2,4], [2,1]])
-    print(convert_2darray_to_1array(l))
+    print(convert_2darray_to_1darray(l))

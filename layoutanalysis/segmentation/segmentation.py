@@ -71,7 +71,7 @@ class Segmentator:
         staff_image = np.zeros(img_data.image.shape)
         staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
         staff_img = draw_polygons(staff_polygons, staff_image)
-        staff_cc = extract_connected_components((staff_img * 255).astype(np.uint8))
+        staff_cc = extract_connected_components((staff_img * 255).astype(np.uint8))[0]
 
         rmin, rmax, cmin, cmax = bbox2(staff_img)
         rmin = rmin - rmin // 10
@@ -84,7 +84,7 @@ class Segmentator:
         processed_image[rmin:rmax, cmin:cmax] = bbox
         processed_image = staff_removal(staffs, processed_image, 3)
 
-        cc_list = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
+        cc_list = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))[0]
         cc_list_cover = cc_cover(np.array(cc_list), np.array(staff_cc), self.settings.cover, use_pred_as_start=True)
         generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
@@ -107,7 +107,7 @@ class Segmentator:
         text_image = draw_polygons(poly_dict['system'], text_image)
 
         processed_image = np.clip(processed_image + text_image, 0, 1)
-        processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
+        processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))[0]
         processed_image_cc = [cc for cc in processed_image_cc if len(cc) > 10]
         data = generate_polygons_from__ccs(processed_image_cc)
         text_polygons = [poly for poly in data]
@@ -150,14 +150,13 @@ class Segmentator:
             img_data.image = binary_dilation(img_data.image, structure=np.full((1, 3), 1))
         staff_image = np.zeros(img_data.image.shape)
 
-
         staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
         distance = []
         for x in range(len(staff_polygons)-1):
             distance.append(staff_polygons[x].distance(staff_polygons[x+1]))
 
         staff_img = draw_polygons(staff_polygons, staff_image)
-        weight = gaussian_filter(staff_img, sigma=(np.average(distance) /4, np.average(distance) * 3 / 4))
+        weight = gaussian_filter(staff_img, sigma=(np.average(distance) / 4, np.average(distance) * 3 / 4))
         #weight = box_blur(staff_img, 130, 48)
         weight = np.clip(weight * 2, 0, 1) * 255 - 125
 
@@ -172,17 +171,29 @@ class Segmentator:
         processed_image[rmin:rmax, cmin:cmax] = bbox
         processed_image = staff_removal(staffs, processed_image, 3)
 
-        cc_list = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
+        cc_list_with_stats = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
-        def get_cc(cc_list, weight_matrix):
+        def get_cc(cc_list, cc_list_stats, cc_list_centroids, weight_matrix, avg_distance):
+            initials = []
             cc_list_new = []
-            for cc in cc_list:
+            for cc_ind, cc in enumerate(cc_list):
                 y, x = zip(*cc)
+                if cc_list_stats[cc_ind, 3] > avg_distance * 1.5:
+                    initials.append(cc)
+                    continue
                 if np.sum(weight_matrix[y, x]) > 0:
-                    cc_list_new.append(cc)
-            return cc_list_new
+                    #print(cc_list_stats[cc_ind, 3])
 
-        cc_list= get_cc(cc_list, weight)
+                    cc_list_new.append(cc_ind)
+            return [cc_list[i] for i in cc_list_new], [cc_list_stats[i] for i in cc_list_new], [cc_list_centroids[i] for i in cc_list_new], initials
+
+        cc_list_with_stats = get_cc(cc_list_with_stats[0], cc_list_with_stats[1], cc_list_with_stats[2], weight, np.average(distance))
+        initials = cc_list_with_stats[3]
+        initials_polygons = []
+        if len(initials) > 0:
+            initials_polygons = generate_polygons_from__ccs(initials)
+        for poly in initials_polygons:
+            poly_dict['initials'].append(poly)
         if self.settings.debug:
             print('Generating debug image')
 
@@ -196,7 +207,7 @@ class Segmentator:
             z, ax = plt.subplots(1, 4, True, True)
             ax[0].imshow(weight)
             ax[1].imshow(staff_img)
-            ax[2].imshow(visulize_cc_list(cc_list, img_data.image.shape))
+            ax[2].imshow(visulize_cc_list(cc_list_with_stats[0], img_data.image.shape))
             ax[3].imshow(img_data.image)
             plt.show()
         generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
@@ -226,8 +237,7 @@ class Segmentator:
                     d[r_ind].append(zip(fp, values))
             return d.values()
 
-
-        cc_list = divide_ccs_into_groups(cc_list, staffs)
+        cc_list = divide_ccs_into_groups(cc_list_with_stats[0], staffs)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list), total=len(cc_list))]
         system_polygons = [poly for p_data in data for poly in p_data]
@@ -246,9 +256,10 @@ class Segmentator:
 
         text_image = np.zeros(img_data.image.shape)
         text_image = draw_polygons(poly_dict['system'], text_image)
+        text_image = draw_polygons(poly_dict['initials'], text_image)
 
         processed_image = np.clip(processed_image + text_image, 0, 1)
-        processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
+        processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))[0]
         processed_image_cc = [cc for cc in processed_image_cc if len(cc) > 10]
         data = generate_polygons_from__ccs(processed_image_cc)
         text_polygons = [poly for poly in data]
@@ -274,6 +285,9 @@ class Segmentator:
             for _poly in poly_dict['system']:
                 x, y = _poly.exterior.xy
                 ax[0].plot(x, y)
+            for _poly in poly_dict['initials']:
+                x, y = _poly.exterior.xy
+                ax[0].plot(x, y)
             ax[1].imshow(staff_img)
             ax[2].imshow(text_image)
             plt.show()
@@ -297,8 +311,8 @@ class Segmentator:
         # charheight, systemheight = vertical_runs((t_region - region_prediction) //255)
 
         processed_img = np.clip(img_with_staffs_removed + staff_img, 0, 1).astype(np.uint8)
-        cc_list = extract_connected_components((1 - processed_img) * 255)
-        cc_list_prediction = extract_connected_components(t_region - region_prediction)
+        cc_list = extract_connected_components((1 - processed_img) * 255)[0]
+        cc_list_prediction = extract_connected_components(t_region - region_prediction)[0]
         cc_list_prediction = [x for x in cc_list_prediction if len(x) > 100]
         cc_list = cc_cover(np.array(cc_list), np.array(cc_list_prediction), self.settings.cover)
         poly_dict = defaultdict(list)
@@ -324,9 +338,9 @@ class Segmentator:
         text_image = draw_polygons(poly_dict['text'], text_image)
 
         image_with_text_removed = np.clip(img_data.image + text_image, 0, 1)
-        cc_list1 = extract_connected_components(((1 - image_with_text_removed) * 255).astype(np.uint8))
+        cc_list1 = extract_connected_components(((1 - image_with_text_removed) * 255).astype(np.uint8))[0]
         cc_list1 = [cc for cc in cc_list1 if len(cc) > 10]
-        cc_list2 = extract_connected_components((staff_img * 255).astype(np.uint8))
+        cc_list2 = extract_connected_components((staff_img * 255).astype(np.uint8))[0]
         cc_list_cover = cc_cover(np.array(cc_list1), np.array(cc_list2), self.settings.cover, use_pred_as_start=True)
 
         generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
