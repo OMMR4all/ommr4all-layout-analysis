@@ -4,7 +4,6 @@ from layoutanalysis.removal.dummy_staff_line_removal import staff_removal
 from layoutanalysis.preprocessing.preprocessingUtil import extract_connected_components, convert_2darray_to_1darray
 from PIL import Image
 import matplotlib.pyplot as plt
-import matplotlib.path as mpltPath
 from itertools import chain
 from scipy.spatial import Delaunay
 import numpy as np
@@ -20,6 +19,8 @@ from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
 from shapely.geometry import Polygon
 from shapely import affinity
 from scipy.ndimage.filters import convolve1d
+from scipy.interpolate import interpolate
+import math
 
 
 @dataclass
@@ -181,7 +182,6 @@ class Segmentator:
                     cc_list_new.append(cc)
             return cc_list_new
 
-
         cc_list= get_cc(cc_list, weight)
         if self.settings.debug:
             print('Generating debug image')
@@ -202,7 +202,6 @@ class Segmentator:
         generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
 
         def divide_ccs_into_groups(cc_list, staffs):
-            import math
             cc_list_height = [cc[-1][0]+ cc[0][0] for cc in cc_list]
             staffs_height = [staff[0][0][0] + staff[-1][0][0] for staff in staffs]
             d = defaultdict(list)
@@ -215,17 +214,22 @@ class Segmentator:
                         r_ind = index
                 d[r_ind].append(cc_list[cc_ind])
 
-            ## add staff lines to groups
+            # add staff lines to groups
             for r_ind, staff in enumerate(staffs):
                 for cc in staff:
-                    d[r_ind].append(cc)
+                    y_list, x_list = zip(*cc)
+                    func = interpolate.interp1d(x_list, y_list)
+                    start = min(x_list)
+                    end = max(x_list)
+                    values = list(range(start, end))
+                    fp = [func(x) for x in values]
+                    d[r_ind].append(zip(fp, values))
             return d.values()
 
 
         cc_list = divide_ccs_into_groups(cc_list, staffs)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list), total=len(cc_list))]
-        #system_polygons = generate_polygons_from__ccs_partial(cc_list, yscale = 1.03)
         system_polygons = [poly for p_data in data for poly in p_data]
 
         polys_to_remove = []
@@ -290,7 +294,7 @@ class Segmentator:
 
         staff_img = draw_polygons(staff_polygons, staff_image)
         img_with_staffs_removed = staff_removal(staffs, 1 - binarized, 3)
-        #charheight, systemheight = vertical_runs((t_region - region_prediction) //255)
+        # charheight, systemheight = vertical_runs((t_region - region_prediction) //255)
 
         processed_img = np.clip(img_with_staffs_removed + staff_img, 0, 1).astype(np.uint8)
         cc_list = extract_connected_components((1 - processed_img) * 255)
@@ -539,6 +543,7 @@ def alpha_shape(points, alpha, only_outer=True):
 
 
 def check_polygon_within_polygon(poly1, poly2):
+    import matplotlib.path as mpltPath
     def inside_polygon(x, y, points):
         """
         Return True if a coordinate (x, y) is inside a polygon defined by
@@ -611,9 +616,10 @@ def check_for_intersection(l1, l2):
     #py = y1 + t*(y2 - y1)
     return False
 
+
 def box_blur(img, radiusc, radiusr):
-    filterr = np.ones((radiusr) * 1) / radiusr
-    filterc = np.ones((radiusc) * 1) / radiusc
+    filterr = np.ones(radiusr * 1) / radiusr
+    filterc = np.ones(radiusc * 1) / radiusc
     image = convolve1d(img, filterr, axis = 0)
     image = convolve1d(image, filterc, axis = 1)
     return image
