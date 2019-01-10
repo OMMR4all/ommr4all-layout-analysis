@@ -21,6 +21,7 @@ from shapely import affinity
 from scipy.ndimage.filters import convolve1d
 from scipy.interpolate import interpolate
 import math
+from scipy.ndimage import gaussian_filter
 
 
 @dataclass
@@ -140,8 +141,8 @@ class Segmentator:
         return poly_dict
 
     def segmentate_with_weight_image(self, staffs, img_data):
-        from scipy.ndimage import gaussian_filter
         poly_dict = defaultdict(list)
+        staffs.sort(key=lambda staff: staff[0][0][0])
 
         img = np.array(Image.open(img_data.path)) / 255
         img_data.image = binarize(img)
@@ -154,11 +155,11 @@ class Segmentator:
         distance = []
         for x in range(len(staff_polygons)-1):
             distance.append(staff_polygons[x].distance(staff_polygons[x+1]))
-
         staff_img = draw_polygons(staff_polygons, staff_image)
-        weight = gaussian_filter(staff_img, sigma=(np.average(distance) / 4, np.average(distance) * 3 / 4))
-        #weight = box_blur(staff_img, 130, 48)
-        weight = np.clip(weight * 2, 0, 1) * 255 - 125
+        weight = gaussian_filter(staff_img, sigma=(np.average(distance) * 1 / 4, np.average(distance) * 3 / 4))
+        weight[weight > 0.12] *= 3
+        weight = np.clip(weight * 1.5, 0.001, 1)
+        weight = 125 + np.log10(weight) * 550
 
         rmin, rmax, cmin, cmax = bbox2(staff_img)
         rmin = rmin - rmin // 10
@@ -182,12 +183,12 @@ class Segmentator:
                     initials.append(cc)
                     continue
                 if np.sum(weight_matrix[y, x]) > 0:
-                    #print(cc_list_stats[cc_ind, 3])
-
                     cc_list_new.append(cc_ind)
+
             return [cc_list[i] for i in cc_list_new], [cc_list_stats[i] for i in cc_list_new], [cc_list_centroids[i] for i in cc_list_new], initials
 
         cc_list_with_stats = get_cc(cc_list_with_stats[0], cc_list_with_stats[1], cc_list_with_stats[2], weight, np.average(distance))
+
         initials = cc_list_with_stats[3]
         initials_polygons = []
         if len(initials) > 0:
@@ -213,7 +214,7 @@ class Segmentator:
         generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
 
         def divide_ccs_into_groups(cc_list, staffs):
-            cc_list_height = [cc[-1][0]+ cc[0][0] for cc in cc_list]
+            cc_list_height = [cc[-1][0] + cc[0][0] for cc in cc_list]
             staffs_height = [staff[0][0][0] + staff[-1][0][0] for staff in staffs]
             d = defaultdict(list)
             for cc_ind, cc in enumerate(cc_list_height):
@@ -246,8 +247,8 @@ class Segmentator:
         for ind1, poly in enumerate(system_polygons):
             for ind2, poly2 in enumerate(system_polygons):
                 if ind1 != ind2:
-                    if poly.contains(poly2):
-                        polys_to_remove.append(ind2)
+                    if poly2.contains(poly):
+                        polys_to_remove.append(ind1)
 
         for ind in reversed(polys_to_remove):
             del system_polygons[ind]
@@ -268,8 +269,8 @@ class Segmentator:
         for ind1, poly in enumerate(text_polygons):
             for ind2, poly2 in enumerate(text_polygons):
                 if ind1 != ind2:
-                    if poly.contains(poly2):
-                        polys_to_remove.append(ind2)
+                    if poly2.contains(poly):
+                        polys_to_remove.append(ind1)
 
         for ind in reversed(polys_to_remove):
             del text_polygons[ind]
