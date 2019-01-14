@@ -1,9 +1,13 @@
 import numpy as np
 from scipy.interpolate import interpolate
+import math
+
 
 def staff_removal(staffs_lines, img, line_height):
     nimg = np.copy(img)
     h = nimg.shape[0]
+    l2 = math.ceil(line_height / 2)
+    l2 = max(l2, 2)
     for system in staffs_lines:
         for ind, staff in enumerate(system):
             y, x = zip(*staff)
@@ -11,7 +15,6 @@ def staff_removal(staffs_lines, img, line_height):
             x_start, x_end = min(x), max(x)
             for i in range(x_start, x_end):
                 count = []
-                l2 = line_height // 2
                 st_point = int(f(i))
                 if nimg[st_point][i] != 0:
                     for z in range(1, l2 + 1):
@@ -19,7 +22,7 @@ def staff_removal(staffs_lines, img, line_height):
                             st_point = st_point-z
                             break
                         if nimg[st_point + z][i] == 0:
-                            st_point = st_point-z
+                            st_point = st_point+z
                             break
                 yt = st_point
                 yb = st_point
