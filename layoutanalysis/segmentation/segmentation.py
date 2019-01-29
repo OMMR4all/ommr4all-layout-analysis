@@ -324,19 +324,7 @@ class Segmentator:
 
             return lyric_cc, text_cc
 
-        def visulize_cc_list2(cc_list, img_shape):
-            cc_image = np.ones(img_shape)
-            for cc in cc_list:
-                #print(cc)
-                y, x = zip(*cc)
-                cc_image[y, x] = 0
-            return cc_image
-
         lyric_cc, text_cc = divide_cc_in_lyric_and_text(processed_image_cc, np.average(distance), staff_polygons)
-        z, ax = plt.subplots(1,2,True, True)
-        ax[0].imshow(visulize_cc_list2(lyric_cc, img_data.image.shape))
-        ax[1].imshow(visulize_cc_list2(text_cc, img_data.image.shape))
-        plt.show()
 
         data = generate_polygons_from__ccs(text_cc)
         text_polygons = [poly for poly in data]
@@ -354,7 +342,26 @@ class Segmentator:
         for poly in lyric_polygons:
             poly_dict['lyrics'].append(poly)
         if self.settings.debug:
+            lyric_image = np.zeros(img_data.image.shape)
+            text_image = np.zeros(img_data.image.shape)
+            initials_image = np.zeros(img_data.image.shape)
+            system_image = np.zeros(img_data.image.shape)
+            lyric_image = draw_polygons(poly_dict['lyrics'], lyric_image) * 255
+            text_image = draw_polygons(poly_dict['text'], text_image) * 255
+            initials_image = draw_polygons(poly_dict['initials'], initials_image) * 255
+            system_image = draw_polygons(poly_dict['system'], system_image) * 255
+            #lyric_image = np.squeeze(np.stack((lyric_image,) * 3, -1))
+
+            og_image = np.squeeze(np.stack((img_data.image,) * 3, -1)) * 255
+            og_image[np.where(lyric_image == 255)] = og_image[np.where(lyric_image == 255)] * [0.8, 0.2, 0]
+            og_image[np.where(text_image == 255)] = og_image[np.where(text_image == 255)] * [0.6, 0.6, 1]
+            og_image[np.where(initials_image == 255)] = og_image[np.where(initials_image == 255)] * [0.8, 0.4, 1]
+            og_image[np.where(system_image == 255)] = og_image[np.where(system_image == 255)] * [0.3, 1, 0.3]
+
             print('Generating debug image')
+            plt.imshow(og_image)
+            plt.show()
+            '''
             c, ax = plt.subplots(1, 3, True, True)
             ax[0].imshow(img_data.image)
             for _poly in poly_dict['lyrics']:
@@ -370,8 +377,9 @@ class Segmentator:
                 x, y = _poly.exterior.xy
                 ax[0].plot(x, y)
             ax[1].imshow(staff_img)
-            ax[2].imshow(text_image)
+            ax[2].imshow(og_image)
             plt.show()
+            '''
         return poly_dict
 
     def segmentate_image(self, staffs, img_data, region_prediction):
