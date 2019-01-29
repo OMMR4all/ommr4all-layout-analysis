@@ -314,7 +314,7 @@ class Segmentator:
                     bot_poly = polys[-1]
 
                     if top_poly[3] < avg_y < bot_poly[1]:
-                        if left + width > top_poly[0] and left - width < top_poly[2]:
+                        if left + width // 2 > top_poly[0] and left + width // 2 < top_poly[2]:
                             lyric_cc.append(cc)
                         else:
                             text_cc.append(cc)
