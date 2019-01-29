@@ -12,6 +12,10 @@ setup(
     url="https://gitlab2.informatik.uni-wuerzburg.de/OMMR4all/ommr4all-layout-analysis.git",
     download_url='https://gitlab2.informatik.uni-wuerzburg.de/OMMR4all/ommr4all-layout-analysis.git',
     install_requires=open("requirements.txt").read().split(),
+    extras_require={
+        'tf_cpu': ['tensorflow>=1.6.0'],
+        'tf_gpu': ['tensorflow-gpu>=1.6.0'],
+    },
     keywords=['OMR', 'layout analysis', 'pixel classifier'],
     data_files=[('', ["requirements.txt"])],
 )
