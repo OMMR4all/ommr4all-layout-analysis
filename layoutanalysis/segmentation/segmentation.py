@@ -22,7 +22,7 @@ from scipy.ndimage.filters import convolve1d
 from scipy.interpolate import interpolate
 import math
 from scipy.ndimage import gaussian_filter
-
+import cv2
 
 @dataclass
 class SegmentationSettings:
@@ -156,6 +156,8 @@ class Segmentator:
         for x in range(len(staff_polygons)-1):
             distance.append(staff_polygons[x].distance(staff_polygons[x+1]))
         staff_img = draw_polygons(staff_polygons, staff_image)
+
+        # Generate weight image
         weight = gaussian_filter(staff_img, sigma=(np.average(distance) * 1 / 4, np.average(distance) * 3 / 4))
         weight[weight > 0.12] *= 3
         weight = np.clip(weight * 1.5, 0.001, 1)
@@ -174,7 +176,7 @@ class Segmentator:
 
         cc_list_with_stats = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
-        def get_cc(cc_list, cc_list_stats, cc_list_centroids, weight_matrix, avg_distance):
+        def segmentate_cc(cc_list, cc_list_stats, cc_list_centroids, weight_matrix, avg_distance):
             initials = []
             cc_list_new = []
             for cc_ind, cc in enumerate(cc_list):
@@ -187,7 +189,7 @@ class Segmentator:
 
             return [cc_list[i] for i in cc_list_new], [cc_list_stats[i] for i in cc_list_new], [cc_list_centroids[i] for i in cc_list_new], initials
 
-        cc_list_with_stats = get_cc(cc_list_with_stats[0], cc_list_with_stats[1], cc_list_with_stats[2], weight, np.average(distance))
+        cc_list_with_stats = segmentate_cc(cc_list_with_stats[0], cc_list_with_stats[1], cc_list_with_stats[2], weight, np.average(distance))
 
         initials = cc_list_with_stats[3]
         initials_polygons = []
@@ -213,6 +215,24 @@ class Segmentator:
             plt.show()
         generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
 
+        def remove_polys_within_polys(polygons):
+            polys_to_remove = []
+            for ind1, poly in enumerate(polygons):
+                for ind2, poly2 in enumerate(polygons):
+                    if ind1 != ind2:
+                        if poly2.contains(poly):
+                            polys_to_remove.append(ind1)
+
+            for ind in reversed(polys_to_remove):
+                del polygons[ind]
+            return polygons
+
+        def remove_polys_smaller_than(polygons, pr):
+            average_text_area = np.mean([x.area for x in polygons])
+            polygons = [x for x in polygons if x.area / average_text_area > pr]
+            return polygons
+
+        # Divide ccs into groups, so that alpha shape computation can be paralellized
         def divide_ccs_into_groups(cc_list, staffs):
             cc_list_height = [cc[-1][0] + cc[0][0] for cc in cc_list]
             staffs_height = [staff[0][0][0] + staff[-1][0][0] for staff in staffs]
@@ -242,16 +262,8 @@ class Segmentator:
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list), total=len(cc_list))]
         system_polygons = [poly for p_data in data for poly in p_data]
+        system_polygons = remove_polys_within_polys(system_polygons)
 
-        polys_to_remove = []
-        for ind1, poly in enumerate(system_polygons):
-            for ind2, poly2 in enumerate(system_polygons):
-                if ind1 != ind2:
-                    if poly2.contains(poly):
-                        polys_to_remove.append(ind1)
-
-        for ind in reversed(polys_to_remove):
-            del system_polygons[ind]
         for poly in system_polygons:
             poly_dict['system'].append(poly)
 
@@ -260,33 +272,101 @@ class Segmentator:
         text_image = draw_polygons(poly_dict['initials'], text_image)
 
         processed_image = np.clip(processed_image + text_image, 0, 1)
-        processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))[0]
-        processed_image_cc = [cc for cc in processed_image_cc if len(cc) > 10]
-        data = generate_polygons_from__ccs(processed_image_cc)
+        processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
+
+        def divide_cc_in_lyric_and_text(ccs, distance, system_polys):
+            cc_list = ccs[0]
+            ccs_stats = ccs[1]
+
+            lyric_cc = []
+            text_cc = []
+            poly_bounds = []
+            for poly in system_polys:
+                poly_bounds.append(poly.bounds)
+
+            poly_bounds.append([poly_bounds[-1][0], poly_bounds[-1][3] + distance, poly_bounds[-1][2],
+                                poly_bounds[-1][3] + distance + poly_bounds[-1][3] - poly_bounds[-1][1]])
+
+            poly_avg_height = np.array([x[1] + (x[3] - x[1]) / 2 for x in poly_bounds])
+            poly_min_x = [x[0] for x in poly_bounds]
+            poly_min_y = [x[1] for x in poly_bounds]
+            poly_max_x = [x[2] for x in poly_bounds]
+            poly_max_y = [x[3] for x in poly_bounds]
+
+            def get_the_x_closest_polys_of_cc(_poly_avg_height, height_of_cc, number_of_cls = 2):
+                avg_height_of_poly= np.absolute(_poly_avg_height - height_of_cc)
+                idx = np.argpartition(avg_height_of_poly, number_of_cls)
+                return idx[:number_of_cls]
+
+            for ind, cc in enumerate(ccs[0]):
+                area = ccs_stats[ind, cv2.CC_STAT_AREA]
+                if area > 10:  # skip small ccs
+                    width = ccs_stats[ind, cv2.CC_STAT_WIDTH]
+                    height = ccs_stats[ind, cv2.CC_STAT_HEIGHT]
+                    top = ccs_stats[ind, cv2.CC_STAT_TOP]
+
+                    left = ccs_stats[ind, cv2.CC_STAT_LEFT]
+                    avg_y = top + height // 2
+                    closest_polys = get_the_x_closest_polys_of_cc(poly_avg_height, avg_y)
+                    polys = [poly_bounds[x] for x in closest_polys]
+                    polys.sort(key= lambda x: x[1])
+                    top_poly = polys[0]
+                    bot_poly = polys[-1]
+
+                    if top_poly[3] < avg_y < bot_poly[1]:
+                        if left > top_poly[0] and left + width < top_poly[2]:
+                            lyric_cc.append(cc)
+                        else:
+                            text_cc.append(cc)
+
+                    else:
+                        text_cc.append(cc)
+
+            return lyric_cc, text_cc
+
+        def visulize_cc_list2(cc_list, img_shape):
+            cc_image = np.ones(img_shape)
+            for cc in cc_list:
+                #print(cc)
+                y, x = zip(*cc)
+                cc_image[y, x] = 0
+            return cc_image
+
+        lyric_cc, text_cc = divide_cc_in_lyric_and_text(processed_image_cc, np.average(distance), staff_polygons)
+        z, ax = plt.subplots(1,2,True, True)
+        ax[0].imshow(visulize_cc_list2(lyric_cc, img_data.image.shape))
+        ax[1].imshow(visulize_cc_list2(text_cc, img_data.image.shape))
+        plt.show()
+
+        data = generate_polygons_from__ccs(text_cc)
         text_polygons = [poly for poly in data]
 
-        polys_to_remove = []
-        for ind1, poly in enumerate(text_polygons):
-            for ind2, poly2 in enumerate(text_polygons):
-                if ind1 != ind2:
-                    if poly2.contains(poly):
-                        polys_to_remove.append(ind1)
+        text_polygons = remove_polys_within_polys(text_polygons)
+        text_polygons = remove_polys_smaller_than(text_polygons, 0.1)
 
-        for ind in reversed(polys_to_remove):
-            del text_polygons[ind]
+        data = generate_polygons_from__ccs(lyric_cc)
+        lyric_polygons = [poly for poly in data]
+        lyric_polygons = remove_polys_within_polys(lyric_polygons)
+        lyric_polygons = remove_polys_smaller_than(lyric_polygons, 0.1)
+
         for poly in text_polygons:
             poly_dict['text'].append(poly)
+        for poly in lyric_polygons:
+            poly_dict['lyrics'].append(poly)
         if self.settings.debug:
             print('Generating debug image')
             c, ax = plt.subplots(1, 3, True, True)
             ax[0].imshow(img_data.image)
-            for _poly in poly_dict['text']:
+            for _poly in poly_dict['lyrics']:
                 x, y = _poly.exterior.xy
                 ax[0].plot(x, y)
             for _poly in poly_dict['system']:
                 x, y = _poly.exterior.xy
                 ax[0].plot(x, y)
             for _poly in poly_dict['initials']:
+                x, y = _poly.exterior.xy
+                ax[0].plot(x, y)
+            for _poly in poly_dict['text']:
                 x, y = _poly.exterior.xy
                 ax[0].plot(x, y)
             ax[1].imshow(staff_img)
@@ -333,10 +413,10 @@ class Segmentator:
         for ind in reversed(polys_to_remove):
             del text_polygons[ind]
         for poly in text_polygons:
-            poly_dict['text'].append(poly)
+            poly_dict['lyrics'].append(poly)
 
         text_image = np.zeros(img_data.image.shape)
-        text_image = draw_polygons(poly_dict['text'], text_image)
+        text_image = draw_polygons(poly_dict['lyrics'], text_image)
 
         image_with_text_removed = np.clip(img_data.image + text_image, 0, 1)
         cc_list1 = extract_connected_components(((1 - image_with_text_removed) * 255).astype(np.uint8))[0]
@@ -366,7 +446,7 @@ class Segmentator:
             print('Generating debug image')
             c, ax = plt.subplots(1, 3, True, True)
             ax[0].imshow(img_data.image)
-            for _poly in poly_dict['text']:
+            for _poly in poly_dict['lyricssdf']:
                 x, y = _poly.exterior.xy
                 ax[0].plot(x, y)
             for _poly in poly_dict['system']:

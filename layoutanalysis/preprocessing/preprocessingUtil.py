@@ -17,7 +17,7 @@ def extract_connected_components(image):
         k = output[1][y_coord][x_coord]
         ccdict[k].append([y_coord, x_coord])
     cc_list = [ccdict[k] for k in sorted(ccdict.keys())]
-    # skip first element of centroid and stats, since it is information related to the image. Not to cc
+    # skip first element of centroid and stats, since it is not a cc, but information related to the image
     labels = output[2][1:]
     centroids = output[3][1:]
     return cc_list, labels, centroids
