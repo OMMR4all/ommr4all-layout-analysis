@@ -314,7 +314,7 @@ class Segmentator:
                     bot_poly = polys[-1]
 
                     if top_poly[3] < avg_y < bot_poly[1]:
-                        if left > top_poly[0] and left + width < top_poly[2]:
+                        if left + width > top_poly[0] and left - width < top_poly[2]:
                             lyric_cc.append(cc)
                         else:
                             text_cc.append(cc)
@@ -533,10 +533,11 @@ def generate_polygons_from__ccs(cc, alpha=15, xscale=1.001, yscale=1.1):
 
 
 def generate_polygon_from_staff(staff):
-    first_line = staff[0]
+    first_line = list(map(list, staff[0]))
+
     first_line[0][1] = first_line[0][1] + -5
 
-    last_line = staff[-1]
+    last_line = list(map(list, staff[-1]))
     last_line[0][1] = last_line[0][1] + -5
     last_line.reverse()
     _polygon = first_line + last_line
