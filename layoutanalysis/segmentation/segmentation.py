@@ -87,7 +87,7 @@ class Segmentator:
 
         cc_list = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))[0]
         cc_list_cover = cc_cover(np.array(cc_list), np.array(staff_cc), self.settings.cover, use_pred_as_start=True)
-        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list_cover), total=len(cc_list_cover))]
         system_polygons = [poly for p_data in data for poly in p_data]
@@ -213,7 +213,7 @@ class Segmentator:
             ax[2].imshow(visulize_cc_list(cc_list_with_stats[0], img_data.image.shape))
             ax[3].imshow(img_data.image)
             plt.show()
-        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs)
 
         def remove_polys_within_polys(polygons):
             polys_to_remove = []
@@ -432,7 +432,7 @@ class Segmentator:
         cc_list2 = extract_connected_components((staff_img * 255).astype(np.uint8))[0]
         cc_list_cover = cc_cover(np.array(cc_list1), np.array(cc_list2), self.settings.cover, use_pred_as_start=True)
 
-        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, yscale=1.03)
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list_cover), total=len(cc_list_cover))]
         system_polygons = [poly for p_data in data for poly in p_data]
@@ -518,7 +518,7 @@ def create_data(path, line_space_height):
     return image_data
 
 
-def generate_polygons_from__ccs(cc, alpha=15, xscale=1.001, yscale=1.1):
+def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0):
     points = np.array(list(chain.from_iterable(cc)))
     edges = alpha_shape(points, alpha)
     polys = polygons(edges)
@@ -527,7 +527,7 @@ def generate_polygons_from__ccs(cc, alpha=15, xscale=1.001, yscale=1.1):
     for poly in polys:
         poly = Polygon(poly)
         poly = poly.simplify(0.8)
-        poly = affinity.scale(poly, xscale, yscale, origin='centroid')
+        poly = poly.buffer(buffer_size)
         polygons_paths.append(poly)
     return polygons_paths
 
