@@ -3,6 +3,7 @@ from pagesegmentation.lib.predictor import PredictSettings
 from layoutanalysis.removal.dummy_staff_line_removal import staff_removal
 from layoutanalysis.preprocessing.preprocessingUtil import extract_connected_components, convert_2darray_to_1darray
 from layoutanalysis.preprocessing.preprocessingUtil import vertical_runs
+from layoutanalysis.segmentation.musicRegion import MusicRegion, MusicRegions
 from PIL import Image
 import matplotlib.pyplot as plt
 from itertools import chain
@@ -195,28 +196,34 @@ class Segmentator:
         processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
         def divide_cc_in_lyric_and_text(ccs, distance, system_polys):
+            poly_avg_height = [x.centroid.y for x in system_polys]
+
+            def cluster(data, maxgap):
+                '''Arrange data into groups where successive elements
+                   differ by no more than *maxgap*
+                '''
+                data.sort()
+                groups = [[data[0]]]
+                for x in data[1:]:
+                    if abs(x - groups[-1][-1]) <= maxgap:
+                        groups[-1].append(x)
+                    else:
+                        groups.append([x])
+                return groups
+
+            music_regions = []
+            for x in cluster(poly_avg_height, distance):
+                region = []
+                for y in x:
+                    region.append(system_polys[poly_avg_height.index(y)])
+                music_regions.append(region)
+            music_region = [MusicRegion(x) for x in music_regions]
+            music_regions = MusicRegions(music_region)
             cc_list = ccs[0]
             ccs_stats = ccs[1]
 
             lyric_cc = []
             text_cc = []
-            poly_bounds = []
-            for poly in system_polys:
-                poly_bounds.append(poly.bounds)
-
-            poly_bounds.append([poly_bounds[-1][0], poly_bounds[-1][3] + distance, poly_bounds[-1][2],
-                                poly_bounds[-1][3] + distance + poly_bounds[-1][3] - poly_bounds[-1][1]])
-
-            poly_avg_height = np.array([x[1] + (x[3] - x[1]) / 2 for x in poly_bounds])
-            poly_min_x = [x[0] for x in poly_bounds]
-            poly_min_y = [x[1] for x in poly_bounds]
-            poly_max_x = [x[2] for x in poly_bounds]
-            poly_max_y = [x[3] for x in poly_bounds]
-
-            def get_the_x_closest_polys_of_cc(_poly_avg_height, height_of_cc, number_of_cls = 2):
-                avg_height_of_poly= np.absolute(_poly_avg_height - height_of_cc)
-                idx = np.argpartition(avg_height_of_poly, number_of_cls)
-                return idx[:number_of_cls]
 
             for ind, cc in enumerate(ccs[0]):
                 area = ccs_stats[ind, cv2.CC_STAT_AREA]
@@ -227,32 +234,47 @@ class Segmentator:
 
                     left = ccs_stats[ind, cv2.CC_STAT_LEFT]
                     avg_y = top + height // 2
-                    closest_polys = get_the_x_closest_polys_of_cc(poly_avg_height, avg_y)
-                    polys = [poly_bounds[x] for x in closest_polys]
-                    polys.sort(key= lambda x: x[1])
-                    top_poly = polys[0]
-                    bot_poly = polys[-1]
+                    top_poly = music_regions.get_upper_region(avg_y)
+                    bot_poly = music_regions.get_lower_region(avg_y)
+                    top_poly_bounds = top_poly.regions[0].bounds
 
-                    if top_poly[3] < avg_y < bot_poly[1]:
-                        if left + width // 2 > top_poly[0] and left + width // 2 < top_poly[2]:
-                            lyric_cc.append(cc)
+                    if bot_poly is None:
+                        bot_poly_bounds = [top_poly_bounds[0], top_poly_bounds[3] + distance, top_poly_bounds[2], top_poly_bounds[3] + distance
+                                    + top_poly_bounds[3] - top_poly_bounds[1]]
+                    else:
+                        bot_poly_bounds = bot_poly.regions[0].bounds
+
+                    if top_poly_bounds[3] < avg_y < bot_poly_bounds[1]:
+                        if top_poly.get_horizontal_gaps() == 0:
+                            if left + width // 2 > top_poly_bounds[0] and left + width // 2 < top_poly_bounds[2]:
+                                lyric_cc.append(cc)
+                            else:
+                                text_cc.append(cc)
                         else:
-                            text_cc.append(cc)
+                            lies_between_staffs = False
+                            for x in  top_poly.get_horizontal_gaps():
+                                if left > x[0] and left + width < x[1]:
+                                    lies_between_staffs = True
+                                    break
+                            if lies_between_staffs:
+                                text_cc.append(cc)
+                            else:
+                                lyric_cc.append(cc)
 
                     else:
                         text_cc.append(cc)
 
             return lyric_cc, text_cc
 
+
         lyric_cc, text_cc = divide_cc_in_lyric_and_text(processed_image_cc, distance, staff_polygons)
 
-        data = generate_polygons_from__ccs(text_cc)
+        data = generate_polygons_from__ccs(text_cc, alpha=distance / 2.3)
         text_polygons = [poly for poly in data]
-
         text_polygons = remove_polys_within_polys(text_polygons)
         text_polygons = remove_polys_smaller_than(text_polygons, 0.1)
 
-        data = generate_polygons_from__ccs(lyric_cc)
+        data = generate_polygons_from__ccs(lyric_cc, alpha=distance / 2.3)
         lyric_polygons = [poly for poly in data]
         lyric_polygons = remove_polys_within_polys(lyric_polygons)
         lyric_polygons = remove_polys_smaller_than(lyric_polygons, 0.1)
@@ -270,7 +292,6 @@ class Segmentator:
             text_image = draw_polygons(poly_dict['text'], text_image) * 255
             initials_image = draw_polygons(poly_dict['initials'], initials_image) * 255
             system_image = draw_polygons(poly_dict['system'], system_image) * 255
-            #lyric_image = np.squeeze(np.stack((lyric_image,) * 3, -1))
 
             og_image = np.squeeze(np.stack((img_data.image,) * 3, -1)) * 255
             og_image[np.where(lyric_image == 255)] = og_image[np.where(lyric_image == 255)] * [0.8, 0.2, 0]
