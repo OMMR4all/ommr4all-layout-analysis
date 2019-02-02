@@ -2,6 +2,7 @@ from layoutanalysis.pixelclassifier.predictor import PCPredictor
 from pagesegmentation.lib.predictor import PredictSettings
 from layoutanalysis.removal.dummy_staff_line_removal import staff_removal
 from layoutanalysis.preprocessing.preprocessingUtil import extract_connected_components, convert_2darray_to_1darray
+from layoutanalysis.preprocessing.preprocessingUtil import vertical_runs
 from PIL import Image
 import matplotlib.pyplot as plt
 from itertools import chain
@@ -17,7 +18,6 @@ import tqdm
 from functools import partial
 from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
 from shapely.geometry import Polygon
-from shapely import affinity
 from scipy.ndimage.filters import convolve1d
 from scipy.interpolate import interpolate
 import math
@@ -60,85 +60,6 @@ class Segmentator:
             for i_ind, i in enumerate(zip(staffs, data)):
                 yield self.segmentate_with_weight_image(i[0], i[1])
 
-    def segmentate_basic(self, staffs, img_data):
-
-        poly_dict = defaultdict(list)
-
-        img = np.array(Image.open(img_data.path)) / 255
-        img_data.image = binarize(img)
-        binarized = 1 - img_data.image
-        if self.settings.erode:
-            img_data.image = binary_dilation(img_data.image, structure=np.full((1, 3), 1))
-        staff_image = np.zeros(img_data.image.shape)
-        staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
-        staff_img = draw_polygons(staff_polygons, staff_image)
-        staff_cc = extract_connected_components((staff_img * 255).astype(np.uint8))[0]
-
-        rmin, rmax, cmin, cmax = bbox2(staff_img)
-        rmin = rmin - rmin // 10
-        rmax = rmax + (staff_img.shape[0] - rmax) // 5
-        cmin = cmin - cmin // 10
-        cmax = cmax + (staff_img.shape[1] - cmax) // 5
-
-        bbox = img_data.image[rmin:rmax, cmin:cmax]
-        processed_image = np.ones(img_data.image.shape)
-        processed_image[rmin:rmax, cmin:cmax] = bbox
-        processed_image = staff_removal(staffs, processed_image, 3)
-
-        cc_list = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))[0]
-        cc_list_cover = cc_cover(np.array(cc_list), np.array(staff_cc), self.settings.cover, use_pred_as_start=True)
-        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs)
-        with multiprocessing.Pool(processes=self.settings.processes) as p:
-            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list_cover), total=len(cc_list_cover))]
-        system_polygons = [poly for p_data in data for poly in p_data]
-
-        polys_to_remove = []
-        for ind1, poly in enumerate(system_polygons):
-            for ind2, poly2 in enumerate(system_polygons):
-                if ind1 != ind2:
-                    if poly.contains(poly2):
-                        polys_to_remove.append(ind2)
-
-        for ind in reversed(polys_to_remove):
-            del system_polygons[ind]
-        for poly in system_polygons:
-            poly_dict['system'].append(poly)
-
-        text_image = np.zeros(img_data.image.shape)
-        text_image = draw_polygons(poly_dict['system'], text_image)
-
-        processed_image = np.clip(processed_image + text_image, 0, 1)
-        processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))[0]
-        processed_image_cc = [cc for cc in processed_image_cc if len(cc) > 10]
-        data = generate_polygons_from__ccs(processed_image_cc)
-        text_polygons = [poly for poly in data]
-
-        polys_to_remove = []
-        for ind1, poly in enumerate(text_polygons):
-            for ind2, poly2 in enumerate(text_polygons):
-                if ind1 != ind2:
-                    if poly.contains(poly2):
-                        polys_to_remove.append(ind2)
-
-        for ind in reversed(polys_to_remove):
-            del text_polygons[ind]
-        for poly in text_polygons:
-            poly_dict['text'].append(poly)
-
-        if self.settings.debug:
-            print('Generating debug image')
-            c, ax = plt.subplots(1, 3, True, True)
-            ax[0].imshow(img_data.image)
-            for _poly in poly_dict['text']:
-                x, y = _poly.exterior.xy
-                ax[0].plot(x, y)
-            for _poly in poly_dict['system']:
-                x, y = _poly.exterior.xy
-                ax[0].plot(x, y)
-            ax[1].imshow(staff_img)
-            ax[2].imshow(text_image)
-            plt.show()
-        return poly_dict
 
     def segmentate_with_weight_image(self, staffs, img_data):
         poly_dict = defaultdict(list)
@@ -152,13 +73,12 @@ class Segmentator:
         staff_image = np.zeros(img_data.image.shape)
 
         staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
-        distance = []
-        for x in range(len(staff_polygons)-1):
-            distance.append(staff_polygons[x].distance(staff_polygons[x+1]))
         staff_img = draw_polygons(staff_polygons, staff_image)
 
+        distance = vertical_runs(staff_img)[1]
+
         # Generate weight image
-        weight = gaussian_filter(staff_img, sigma=(np.average(distance) * 1 / 4, np.average(distance) * 3 / 4))
+        weight = gaussian_filter(staff_img, sigma=(distance * 1 / 4, distance * 3 / 4))
         weight[weight > 0.12] *= 3
         weight = np.clip(weight * 1.5, 0.001, 1)
         weight = 125 + np.log10(weight) * 550
@@ -189,7 +109,7 @@ class Segmentator:
 
             return [cc_list[i] for i in cc_list_new], [cc_list_stats[i] for i in cc_list_new], [cc_list_centroids[i] for i in cc_list_new], initials
 
-        cc_list_with_stats = segmentate_cc(cc_list_with_stats[0], cc_list_with_stats[1], cc_list_with_stats[2], weight, np.average(distance))
+        cc_list_with_stats = segmentate_cc(cc_list_with_stats[0], cc_list_with_stats[1], cc_list_with_stats[2], weight, distance)
 
         initials = cc_list_with_stats[3]
         initials_polygons = []
@@ -324,7 +244,7 @@ class Segmentator:
 
             return lyric_cc, text_cc
 
-        lyric_cc, text_cc = divide_cc_in_lyric_and_text(processed_image_cc, np.average(distance), staff_polygons)
+        lyric_cc, text_cc = divide_cc_in_lyric_and_text(processed_image_cc, distance, staff_polygons)
 
         data = generate_polygons_from__ccs(text_cc)
         text_polygons = [poly for poly in data]
@@ -644,58 +564,6 @@ def alpha_shape(points, alpha, only_outer=True):
             add_edge(edges, ib, ic)
             add_edge(edges, ic, ia)
     return edges
-
-
-def check_polygon_within_polygon(poly1, poly2):
-    import matplotlib.path as mpltPath
-    def inside_polygon(x, y, points):
-        """
-        Return True if a coordinate (x, y) is inside a polygon defined by
-        a list of verticies [(x1, y1), (x2, x2), ... , (xN, yN)].
-
-        Reference: http://www.ariel.com.au/a/python-point-int-poly.html
-        """
-        n = len(points)
-        inside = False
-        p1x, p1y = points[0]
-        for i in range(1, n + 1):
-            p2x, p2y = points[i % n]
-            if y > min(p1y, p2y):
-                if y <= max(p1y, p2y):
-                    if x <= max(p1x, p2x):
-                        if p1y != p2y:
-                            xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                        if p1x == p2x or x <= xinters:
-                            inside = not inside
-            p1x, p1y = p2x, p2y
-        return inside
-
-    t = check_polygon_intersection(poly1, poly2)
-    if not t:
-        path = mpltPath.Path(poly2)
-        inside = path.contains_point([poly1[0][0], poly1[0][1]])
-        if inside:
-            return True
-        #if inside_polygon(poly1[0][0], poly1[0][1], poly2):
-        #    return True
-    return False
-
-
-def check_polygon_intersection(p1, p2):
-
-    def check_line_intersects_polygon(l1, p2):
-        for t in range(len(p2)-1):
-            if check_for_intersection(l1, [p2[t], p2[t+1]]):
-                return True
-
-        return False
-    intersection = False
-    for i in range(len(p1)-1):
-        if check_line_intersects_polygon([p1[i], p1[i+1]], p2):
-            intersection = True
-            break
-
-    return intersection
 
 
 def check_for_intersection(l1, l2):
