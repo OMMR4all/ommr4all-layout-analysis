@@ -61,7 +61,6 @@ class Segmentator:
             for i_ind, i in enumerate(zip(staffs, data)):
                 yield self.segmentate_with_weight_image(i[0], i[1])
 
-
     def segmentate_with_weight_image(self, staffs, img_data):
         poly_dict = defaultdict(list)
         staffs.sort(key=lambda staff: staff[0][0][0])
@@ -97,12 +96,12 @@ class Segmentator:
 
         cc_list_with_stats = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
-        def segmentate_cc(cc_list, cc_list_stats, cc_list_centroids, weight_matrix, avg_distance):
+        def segmentate_cc(cc_list, cc_list_stats, cc_list_centroids, weight_matrix, avg_distance_between_systems):
             initials = []
             cc_list_new = []
             for cc_ind, cc in enumerate(cc_list):
                 y, x = zip(*cc)
-                if cc_list_stats[cc_ind, 3] > avg_distance * 1.5:
+                if cc_list_stats[cc_ind, 3] > avg_distance_between_systems * 1.5:
                     initials.append(cc)
                     continue
                 if np.sum(weight_matrix[y, x]) > 0:
@@ -134,7 +133,6 @@ class Segmentator:
             ax[2].imshow(visulize_cc_list(cc_list_with_stats[0], img_data.image.shape))
             ax[3].imshow(img_data.image)
             plt.show()
-        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs)
 
         def remove_polys_within_polys(polygons):
             polys_to_remove = []
@@ -153,8 +151,8 @@ class Segmentator:
             polygons = [x for x in polygons if x.area / average_text_area > pr]
             return polygons
 
-        # Divide ccs into groups, so that alpha shape computation can be paralellized
-        def divide_ccs_into_groups(cc_list, staffs):
+        # group ccs into groups, so that alpha shape computation can be paralellized
+        def group_ccs_into_groups(cc_list, staffs):
             cc_list_height = [cc[-1][0] + cc[0][0] for cc in cc_list]
             staffs_height = [staff[0][0][0] + staff[-1][0][0] for staff in staffs]
             d = defaultdict(list)
@@ -179,7 +177,8 @@ class Segmentator:
                     d[r_ind].append(zip(fp, values))
             return d.values()
 
-        cc_list = divide_ccs_into_groups(cc_list_with_stats[0], staffs)
+        cc_list = group_ccs_into_groups(cc_list_with_stats[0], staffs)
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list), total=len(cc_list))]
         system_polygons = [poly for p_data in data for poly in p_data]
