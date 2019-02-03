@@ -19,6 +19,7 @@ import tqdm
 from functools import partial
 from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
 from shapely.geometry import Polygon
+from shapely.ops import cascaded_union
 from scipy.ndimage.filters import convolve1d
 from scipy.interpolate import interpolate
 import math
@@ -83,6 +84,7 @@ class Segmentator:
         weight = np.clip(weight * 1.5, 0.001, 1)
         weight = 125 + np.log10(weight) * 550
 
+        # Generate windowed image
         rmin, rmax, cmin, cmax = bbox2(staff_img)
         rmin = rmin - rmin // 10
         rmax = rmax + (staff_img.shape[0] - rmax) // 5
@@ -96,7 +98,9 @@ class Segmentator:
 
         cc_list_with_stats = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
-        def segmentate_cc(cc_list, cc_list_stats, cc_list_centroids, weight_matrix, avg_distance_between_systems):
+        def segmentate_cc(cc_list_with_stats, weight_matrix, avg_distance_between_systems):
+            cc_list = cc_list_with_stats[0]
+            cc_list_stats = cc_list_with_stats[1]
             initials = []
             cc_list_new = []
             for cc_ind, cc in enumerate(cc_list):
@@ -105,16 +109,15 @@ class Segmentator:
                     initials.append(cc)
                     continue
                 if np.sum(weight_matrix[y, x]) > 0:
-                    cc_list_new.append(cc_ind)
+                    cc_list_new.append(cc)
 
-            return [cc_list[i] for i in cc_list_new], [cc_list_stats[i] for i in cc_list_new], [cc_list_centroids[i] for i in cc_list_new], initials
+            return cc_list_new, initials
 
-        cc_list_with_stats = segmentate_cc(cc_list_with_stats[0], cc_list_with_stats[1], cc_list_with_stats[2], weight, distance)
+        system_ccs, initials = segmentate_cc(cc_list_with_stats, weight, distance)
 
-        initials = cc_list_with_stats[3]
         initials_polygons = []
         if len(initials) > 0:
-            initials_polygons = generate_polygons_from__ccs(initials)
+            initials_polygons = list(chain.from_iterable([generate_polygons_from__ccs([x], union=True) for x in initials]))
         for poly in initials_polygons:
             poly_dict['initials'].append(poly)
         if self.settings.debug:
@@ -177,8 +180,8 @@ class Segmentator:
                     d[r_ind].append(zip(fp, values))
             return d.values()
 
-        cc_list = group_ccs_into_groups(cc_list_with_stats[0], staffs)
-        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance)
+        cc_list = group_ccs_into_groups(system_ccs, staffs)
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance, union=True)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list), total=len(cc_list))]
         system_polygons = [poly for p_data in data for poly in p_data]
@@ -218,9 +221,8 @@ class Segmentator:
                 music_regions.append(region)
             music_region = [MusicRegion(x) for x in music_regions]
             music_regions = MusicRegions(music_region)
-            cc_list = ccs[0]
-            ccs_stats = ccs[1]
 
+            ccs_stats = ccs[1]
             lyric_cc = []
             text_cc = []
 
@@ -270,7 +272,6 @@ class Segmentator:
                         text_cc.append(cc)
             return lyric_cc, text_cc
 
-
         lyric_cc, text_cc = divide_cc_in_lyric_and_text(processed_image_cc, distance, staff_polygons)
 
         data = generate_polygons_from__ccs(text_cc, alpha=distance / 2.3)
@@ -306,25 +307,6 @@ class Segmentator:
             print('Generating debug image')
             plt.imshow(og_image)
             plt.show()
-            '''
-            c, ax = plt.subplots(1, 3, True, True)
-            ax[0].imshow(img_data.image)
-            for _poly in poly_dict['lyrics']:
-                x, y = _poly.exterior.xy
-                ax[0].plot(x, y)
-            for _poly in poly_dict['system']:
-                x, y = _poly.exterior.xy
-                ax[0].plot(x, y)
-            for _poly in poly_dict['initials']:
-                x, y = _poly.exterior.xy
-                ax[0].plot(x, y)
-            for _poly in poly_dict['text']:
-                x, y = _poly.exterior.xy
-                ax[0].plot(x, y)
-            ax[1].imshow(staff_img)
-            ax[2].imshow(og_image)
-            plt.show()
-            '''
         return poly_dict
 
     def segmentate_image(self, staffs, img_data, region_prediction):
@@ -463,8 +445,10 @@ def create_data(path, line_space_height):
     return image_data
 
 
-def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0):
+def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0, union=False):
     points = np.array(list(chain.from_iterable(cc)))
+    if len(points) < 4:
+        pass
     edges = alpha_shape(points, alpha)
     polys = polygons(edges)
     polys = [np.flip(points[poly], axis=1) for poly in polys]
@@ -474,6 +458,8 @@ def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0):
         poly = poly.simplify(0.8)
         poly = poly.buffer(buffer_size)
         polygons_paths.append(poly)
+    if union is True:
+        return [cascaded_union(polygons_paths)]
     return polygons_paths
 
 
