@@ -78,7 +78,7 @@ class Segmentator:
         distance = vertical_runs(staff_img)[1]
 
         # Generate weight image
-        weight = gaussian_filter(staff_img, sigma=(distance * 1 / 4, distance * 3 / 4))
+        weight = gaussian_filter(staff_img, sigma=(distance * 1 / 5, distance * 3 / 4))
         weight[weight > 0.12] *= 3
         weight = np.clip(weight * 1.5, 0.001, 1)
         weight = 125 + np.log10(weight) * 550
@@ -101,7 +101,7 @@ class Segmentator:
             cc_list_new = []
             for cc_ind, cc in enumerate(cc_list):
                 y, x = zip(*cc)
-                if cc_list_stats[cc_ind, 3] > avg_distance_between_systems * 1.5:
+                if cc_list_stats[cc_ind, 3] > avg_distance_between_systems * 1.3:
                     initials.append(cc)
                     continue
                 if np.sum(weight_matrix[y, x]) > 0:
@@ -154,7 +154,7 @@ class Segmentator:
         # group ccs into groups, so that alpha shape computation can be paralellized
         def group_ccs_into_groups(cc_list, staffs):
             cc_list_height = [cc[-1][0] + cc[0][0] for cc in cc_list]
-            staffs_height = [staff[0][0][0] + staff[-1][0][0] for staff in staffs]
+            staffs_height = [staff[0][0][0] + staff[-1][-1][0] for staff in staffs]
             d = defaultdict(list)
             for cc_ind, cc in enumerate(cc_list_height):
                 r = math.inf
@@ -235,17 +235,23 @@ class Segmentator:
                     avg_y = top + height // 2
                     top_poly = music_regions.get_upper_region(avg_y)
                     bot_poly = music_regions.get_lower_region(avg_y)
-                    top_poly_bounds = top_poly.regions[0].bounds
 
-                    if bot_poly is None:
-                        bot_poly_bounds = [top_poly_bounds[0], top_poly_bounds[3] + distance, top_poly_bounds[2], top_poly_bounds[3] + distance
-                                    + top_poly_bounds[3] - top_poly_bounds[1]]
+                    top_poly_bounds = None
+                    bot_poly_bounds = None
+                    if top_poly is not None:
+                        top_poly_bounds = top_poly.regions[0].bounds
+                    if bot_poly is None and top_poly is not None:
+                        bot_poly_bounds = [top_poly_bounds[0], top_poly_bounds[3] + distance, top_poly_bounds[2],
+                                           top_poly_bounds[3] + distance + top_poly_bounds[3] - top_poly_bounds[1]]
                     else:
                         bot_poly_bounds = bot_poly.regions[0].bounds
 
-                    if top_poly_bounds[3] < avg_y < bot_poly_bounds[1]:
+                    if top_poly_bounds is None:
+                        text_cc.append(cc)
+                    elif top_poly_bounds[1] + top_poly_bounds[3] - top_poly_bounds[3] < avg_y < bot_poly_bounds[1] +\
+                            bot_poly_bounds[3] - bot_poly_bounds[1]:
                         if top_poly.get_horizontal_gaps() == 0:
-                            if left + width // 2 > top_poly_bounds[0] and left + width // 2 < top_poly_bounds[2]:
+                            if top_poly_bounds[2] > left + width // 2 > top_poly_bounds[0]:
                                 lyric_cc.append(cc)
                             else:
                                 text_cc.append(cc)
@@ -262,7 +268,6 @@ class Segmentator:
 
                     else:
                         text_cc.append(cc)
-
             return lyric_cc, text_cc
 
 
