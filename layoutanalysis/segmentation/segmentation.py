@@ -181,7 +181,7 @@ class Segmentator:
             return d.values()
 
         cc_list = group_ccs_into_groups(system_ccs, staffs)
-        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance, union=True)
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance, union=False)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list), total=len(cc_list))]
         system_polygons = [poly for p_data in data for poly in p_data]
@@ -197,7 +197,7 @@ class Segmentator:
         processed_image = np.clip(processed_image + text_image, 0, 1)
         processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
-        def divide_cc_in_lyric_and_text(ccs, distance, system_polys):
+        def divide_cc_in_lyric_and_text(ccs, distance, system_polys, staffs):
             poly_avg_height = [x.centroid.y for x in system_polys]
 
             def cluster(data, maxgap):
@@ -214,12 +214,20 @@ class Segmentator:
                 return groups
 
             music_regions = []
+            staff_regions = []
             for x in cluster(poly_avg_height, distance):
+                print(x)
                 region = []
+                line_regions = []
                 for y in x:
                     region.append(system_polys[poly_avg_height.index(y)])
+                    line_regions.append(staffs[poly_avg_height.index(y)])
                 music_regions.append(region)
-            music_region = [MusicRegion(x) for x in music_regions]
+                if len(line_regions) > 1:
+                    staff_regions.append(list(zip(*line_regions)))
+                else:
+                    staff_regions.append(line_regions)
+            music_region = [MusicRegion(x, y) for x, y in zip(music_regions, staff_regions)]
             music_regions = MusicRegions(music_region)
 
             ccs_stats = ccs[1]
@@ -235,23 +243,24 @@ class Segmentator:
 
                     left = ccs_stats[ind, cv2.CC_STAT_LEFT]
                     avg_y = top + height // 2
+                    avg_x = left + width // 2
                     top_poly = music_regions.get_upper_region(avg_y)
                     bot_poly = music_regions.get_lower_region(avg_y)
-
                     top_poly_bounds = None
                     bot_poly_bounds = None
                     if top_poly is not None:
                         top_poly_bounds = top_poly.regions[0].bounds
-                    if bot_poly is None and top_poly is not None:
-                        bot_poly_bounds = [top_poly_bounds[0], top_poly_bounds[3] + distance, top_poly_bounds[2],
-                                           top_poly_bounds[3] + distance + top_poly_bounds[3] - top_poly_bounds[1]]
-                    else:
-                        bot_poly_bounds = bot_poly.regions[0].bounds
 
                     if top_poly_bounds is None:
                         text_cc.append(cc)
-                    elif top_poly_bounds[1] + top_poly_bounds[3] - top_poly_bounds[3] < avg_y < bot_poly_bounds[1] +\
-                            bot_poly_bounds[3] - bot_poly_bounds[1]:
+
+                    top_border = top_poly.get_maxy_at_x(avg_x)
+                    bot_border = None
+                    if bot_poly:
+                        bot_border = bot_poly.get_miny_at_x(avg_x)
+                    else:
+                        bot_border = top_border + distance
+                    if top_border < avg_y < bot_border:
                         if top_poly.get_horizontal_gaps() == 0:
                             if top_poly_bounds[2] > left + width // 2 > top_poly_bounds[0]:
                                 lyric_cc.append(cc)
@@ -272,7 +281,7 @@ class Segmentator:
                         text_cc.append(cc)
             return lyric_cc, text_cc
 
-        lyric_cc, text_cc = divide_cc_in_lyric_and_text(processed_image_cc, distance, staff_polygons)
+        lyric_cc, text_cc = divide_cc_in_lyric_and_text(processed_image_cc, distance, staff_polygons, staffs)
 
         data = generate_polygons_from__ccs(text_cc, alpha=distance / 2.3)
         text_polygons = [poly for poly in data]

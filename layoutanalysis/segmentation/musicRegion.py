@@ -30,9 +30,10 @@ class MusicRegions:
 
 
 class MusicRegion:
-    def __init__(self, regions):
+    def __init__(self, regions, staffs):
         self.regions = sorted(regions, key= lambda x : x.centroid.x)
         self.avg_height = np.mean([y.centroid.y for y in regions])
+        self.staffs = staffs
 
     def get_horizontal_gaps(self):
         if len(self.regions) == 1:
@@ -49,3 +50,11 @@ class MusicRegion:
 
     def get_height_difference(self, height):
         return abs(self.avg_height - height)
+
+    def get_miny_at_x(self, x_arr):
+        y, x = zip(*self.staffs[0][0])
+        return np.interp(x_arr, x , y)
+
+    def get_maxy_at_x(self, x_arr):
+        y, x = zip(*self.staffs[0][-1])
+        return np.interp(x_arr, x , y)
