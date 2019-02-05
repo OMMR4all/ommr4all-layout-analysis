@@ -146,30 +146,6 @@ class Segmentator:
 
             return cc_list_new, initials
 
-        system_ccs, initials = segmentate_cc(cc_list_with_stats, weight, distance)
-
-        initials_polygons = []
-        if len(initials) > 0:
-            initials_polygons = list(chain.from_iterable([generate_polygons_from__ccs([x], union=True) for x in initials]))
-        for poly in initials_polygons:
-            poly_dict['initials'].append(poly)
-        if self.settings.debug and False:
-            print('Generating debug image')
-
-            def visulize_cc_list(cc_list, img_shape):
-                cc_image = np.ones(img_shape)
-                for cc in cc_list:
-                    y, x = zip(*cc)
-                    cc_image[y, x] = 0
-                return cc_image
-
-            z, ax = plt.subplots(1, 4, True, True)
-            ax[0].imshow(weight)
-            ax[1].imshow(staff_img)
-            ax[2].imshow(visulize_cc_list(cc_list_with_stats[0], img_data.image.shape))
-            ax[3].imshow(img_data.image)
-            plt.show()
-
         def remove_polys_within_polys(polygons):
             polys_to_remove = []
             for ind1, poly in enumerate(polygons):
@@ -221,6 +197,33 @@ class Segmentator:
                     d[r_ind].append(zip(fp, values))
             return d.values()
 
+        system_ccs, initials = segmentate_cc(cc_list_with_stats, weight, distance)
+
+        initials_polygons = []
+        if len(initials) > 0:
+            initials_polygons = list(chain.from_iterable([generate_polygons_from__ccs([x], alpha=distance / 2)
+                                                          for x in initials]))
+            initials_polygons = remove_polys_within_polys(initials_polygons)
+
+        for poly in initials_polygons:
+            poly_dict['initials'].append(poly)
+        if self.settings.debug and False:
+            print('Generating debug image')
+
+            def visulize_cc_list(cc_list, img_shape):
+                cc_image = np.ones(img_shape)
+                for cc in cc_list:
+                    y, x = zip(*cc)
+                    cc_image[y, x] = 0
+                return cc_image
+
+            z, ax = plt.subplots(1, 4, True, True)
+            ax[0].imshow(weight)
+            ax[1].imshow(staff_img)
+            ax[2].imshow(visulize_cc_list(cc_list_with_stats[0], img_data.image.shape))
+            ax[3].imshow(img_data.image)
+            plt.show()
+
         cc_list = group_ccs(system_ccs, music_regions)
         generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance, union=False)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
@@ -256,14 +259,11 @@ class Segmentator:
                     avg_x = left + width // 2
                     top_poly = music_regions.get_upper_region(avg_y)
                     bot_poly = music_regions.get_lower_region(avg_y)
-                    top_poly_bounds = None
-                    bot_poly_bounds = None
-                    if top_poly is not None:
-                        top_poly_bounds = top_poly.regions[0].bounds
 
-                    if top_poly_bounds is None:
+                    if top_poly is None:
                         text_cc.append(cc)
-
+                        continue
+                    top_poly_bounds = top_poly.regions[0].bounds
                     top_border = top_poly.get_maxy_at_x(avg_x)
                     bot_border = None
                     if bot_poly:
@@ -278,7 +278,7 @@ class Segmentator:
                                 text_cc.append(cc)
                         else:
                             lies_between_staffs = False
-                            for x in  top_poly.get_horizontal_gaps():
+                            for x in top_poly.get_horizontal_gaps():
                                 if left > x[0] and left + width < x[1]:
                                     lies_between_staffs = True
                                     break
@@ -475,8 +475,11 @@ def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0, union=False):
     for poly in polys:
         poly = Polygon(poly)
         poly = poly.simplify(0.8)
-        poly = poly.buffer(buffer_size)
+        poly_buffered = poly.buffer(buffer_size)
+        if poly_buffered.geom_type == 'MultiPolygon':
+            poly_buffered = poly
         polygons_paths.append(poly)
+        x = poly.exterior
     if union is True:
         return [cascaded_union(polygons_paths)]
     return polygons_paths
