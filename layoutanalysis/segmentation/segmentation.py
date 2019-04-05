@@ -30,6 +30,8 @@ import cv2
 class SegmentationSettings:
     erode: bool = False
     debug: bool = False
+    capitals: bool = True
+    weight_threshold: float = 0.5
     lineSpaceHeight: int = 20
     targetLineSpaceHeight: int = 10
     model: [str] = None
@@ -55,12 +57,8 @@ class Segmentator:
         create_data_partital = partial(create_data, line_space_height=self.settings.lineSpaceHeight)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(create_data_partital, img_paths), total=len(img_paths))]
-        if self.settings.model:
-            for i, pred in enumerate(self.predictor.predict(data)):
-                yield self.segmentate_image(staffs[i], data[i], pred)
-        else:
-            for i_ind, i in enumerate(zip(staffs, data)):
-                yield self.segmentate_with_weight_image(i[0], i[1])
+        for i_ind, i in enumerate(zip(staffs, data)):
+            yield self.segmentate_with_weight_image(i[0], i[1])
 
     def segmentate_with_weight_image(self, staffs, img_data):
         poly_dict = defaultdict(list)
@@ -68,56 +66,22 @@ class Segmentator:
 
         img = np.array(Image.open(img_data.path)) / 255
         img_data.image = binarize(img)
-        binarized = 1 - img_data.image
+
         if self.settings.erode:
             img_data.image = binary_dilation(img_data.image, structure=np.full((1, 3), 1))
+
         staff_image = np.zeros(img_data.image.shape)
         staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
         staff_img = draw_polygons(staff_polygons, staff_image)
         distance = vertical_runs(staff_img)[1]
 
-        def generate_music_region(staff_polygons, staffs, distance):
-            poly_avg_height = [x.centroid.y for x in staff_polygons]
-
-            def cluster(data, maxgap):
-                '''Arrange data into groups where successive elements
-                   differ by no more than *maxgap*
-                '''
-                data.sort()
-                groups = [[data[0]]]
-                for x in data[1:]:
-                    if abs(x - groups[-1][-1]) <= maxgap:
-                        groups[-1].append(x)
-                    else:
-                        groups.append([x])
-                return groups
-
-            music_regions = []
-            staff_regions = []
-            for x in cluster(poly_avg_height, distance):
-                region = []
-                line_regions = []
-                for y in x:
-                    region.append(staff_polygons[poly_avg_height.index(y)])
-                    line_regions.append(staffs[poly_avg_height.index(y)])
-                music_regions.append(region)
-                if len(line_regions) > 1:
-                    staff_regions.append(list(zip(*line_regions)))
-                else:
-                    staff_regions.append(line_regions)
-            music_region = [MusicRegion(x, y) for x, y in zip(music_regions, staff_regions)]
-            music_regions = MusicRegions(music_region, staffs)
-            return music_regions
         music_regions = generate_music_region(staff_polygons, staffs, distance)
 
+        # genearte weight image
+        weight = gaussian_filter(staff_img, sigma=(distance * 2 / 4, distance * 2 / 4))
+        weight[staff_img == 1] = 1
 
-        # Generate weight image
-        weight = gaussian_filter(staff_img, sigma=(distance * 1 / 5, distance * 3 / 4))
-        weight[weight > 0.12] *= 3
-        weight = np.clip(weight * 1.5, 0.001, 1)
-        weight = 125 + np.log10(weight) * 550
-
-        # Generate windowed image
+        # cut out peripherie
         rmin, rmax, cmin, cmax = bbox2(staff_img)
         rmin = rmin - rmin // 10
         rmax = rmax + (staff_img.shape[0] - rmax) // 5
@@ -127,42 +91,33 @@ class Segmentator:
         bbox = img_data.image[rmin:rmax, cmin:cmax]
         processed_image = np.ones(img_data.image.shape)
         processed_image[rmin:rmax, cmin:cmax] = bbox
+
+        # remove staff lines
         processed_image = staff_removal(staffs, processed_image, 3)
 
+        # extract remaining CCs
         cc_list_with_stats = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
-        def segmentate_cc(cc_list_with_stats, weight_matrix, avg_distance_between_systems):
+        # separate CCs in music and text
+        def segmentate_cc(cc_list_with_stats, weight_matrix, avg_distance_between_systems, segmentate_capitals=True,
+                          threshold=0.5):
             cc_list = cc_list_with_stats[0]
             cc_list_stats = cc_list_with_stats[1]
             initials = []
             cc_list_new = []
             for cc_ind, cc in enumerate(cc_list):
                 y, x = zip(*cc)
-                if cc_list_stats[cc_ind, 3] > avg_distance_between_systems * 1.3:
+                min_max_difference = np.max(weight_matrix[y, x]) - np.min(weight_matrix[y, x])
+
+                if segmentate_capitals and min_max_difference > 0.5 and cc_list_stats[cc_ind, 3] > avg_distance_between_systems:
                     initials.append(cc)
                     continue
-                if np.sum(weight_matrix[y, x]) > 0:
+                if np.mean(weight_matrix[y, x]) > threshold:
                     cc_list_new.append(cc)
-
+                    continue
             return cc_list_new, initials
 
-        def remove_polys_within_polys(polygons):
-            polys_to_remove = []
-            for ind1, poly in enumerate(polygons):
-                for ind2, poly2 in enumerate(polygons):
-                    if ind1 != ind2:
-                        if poly2.contains(poly):
-                            polys_to_remove.append(ind1)
-
-            for ind in reversed(polys_to_remove):
-                del polygons[ind]
-            return polygons
-
-        def remove_polys_smaller_than(polygons, pr):
-            average_text_area = np.mean([x.area for x in polygons])
-            polygons = [x for x in polygons if x.area / average_text_area > pr]
-            return polygons
-
+        # Divide spaces into groups that reflect systems
         def group_ccs(cc_list, music_regions : MusicRegion):
             d = defaultdict(list)
             for cc_ind, cc in enumerate(cc_list):
@@ -185,6 +140,7 @@ class Segmentator:
                                 break
                     index += len(x.regions)
                 d[r_ind].append(cc_list[cc_ind])
+
             # add staff lines to groups
             for r_ind, staff in enumerate(music_regions.staffs):
                 for cc in staff:
@@ -197,8 +153,11 @@ class Segmentator:
                     d[r_ind].append(zip(fp, values))
             return d.values()
 
-        system_ccs, initials = segmentate_cc(cc_list_with_stats, weight, distance)
+        # separate CCs in music and text
+        system_ccs, initials = segmentate_cc(cc_list_with_stats, weight, distance,
+                                             segmentate_capitals= self.settings.capitals)
 
+        # Generate polygons enclosing the initials/ capitals
         initials_polygons = []
         if len(initials) > 0:
             initials_polygons = list(chain.from_iterable([generate_polygons_from__ccs([x], alpha=distance / 2)
@@ -207,40 +166,28 @@ class Segmentator:
 
         for poly in initials_polygons:
             poly_dict['initials'].append(poly)
-        if self.settings.debug and False:
-            print('Generating debug image')
-
-            def visulize_cc_list(cc_list, img_shape):
-                cc_image = np.ones(img_shape)
-                for cc in cc_list:
-                    y, x = zip(*cc)
-                    cc_image[y, x] = 0
-                return cc_image
-
-            z, ax = plt.subplots(1, 4, True, True)
-            ax[0].imshow(weight)
-            ax[1].imshow(staff_img)
-            ax[2].imshow(visulize_cc_list(cc_list_with_stats[0], img_data.image.shape))
-            ax[3].imshow(img_data.image)
-            plt.show()
 
         cc_list = group_ccs(system_ccs, music_regions)
-        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance, union=False)
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance, union=False,
+                                                      buffer_size=2.0)
+        # Generate polygons enclosing the systems
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list), total=len(cc_list))]
         system_polygons = [poly for p_data in data for poly in p_data]
         system_polygons = remove_polys_within_polys(system_polygons)
-
         for poly in system_polygons:
             poly_dict['system'].append(poly)
 
+        # Remove capital and system CCs
         text_image = np.zeros(img_data.image.shape)
         text_image = draw_polygons(poly_dict['system'], text_image)
         text_image = draw_polygons(poly_dict['initials'], text_image)
-
         processed_image = np.clip(processed_image + text_image, 0, 1)
+
+        # extract remaining CCs
         processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
+        # divide remaining CCs in lyric/text
         def divide_cc_in_lyric_and_text(ccs, distance_between_staffs, music_regions):
 
             ccs_stats = ccs[1]
@@ -263,9 +210,9 @@ class Segmentator:
                     if top_poly is None:
                         text_cc.append(cc)
                         continue
+
                     top_poly_bounds = top_poly.regions[0].bounds
                     top_border = top_poly.get_maxy_at_x(avg_x)
-                    bot_border = None
                     if bot_poly:
                         bot_border = bot_poly.get_miny_at_x(avg_x)
                     else:
@@ -307,6 +254,7 @@ class Segmentator:
             poly_dict['text'].append(poly)
         for poly in lyric_polygons:
             poly_dict['lyrics'].append(poly)
+
         if self.settings.debug:
             lyric_image = np.zeros(img_data.image.shape)
             text_image = np.zeros(img_data.image.shape)
@@ -328,6 +276,7 @@ class Segmentator:
             plt.show()
         return poly_dict
 
+    # alternative algorithm, outdated
     def segmentate_image(self, staffs, img_data, region_prediction):
 
         img = np.array(Image.open(img_data.path)) / 255
@@ -343,7 +292,6 @@ class Segmentator:
 
         staff_img = draw_polygons(staff_polygons, staff_image)
         img_with_staffs_removed = staff_removal(staffs, 1 - binarized, 3)
-        # charheight, systemheight = vertical_runs((t_region - region_prediction) //255)
 
         processed_img = np.clip(img_with_staffs_removed + staff_img, 0, 1).astype(np.uint8)
         cc_list = extract_connected_components((1 - processed_img) * 255)[0]
@@ -380,7 +328,8 @@ class Segmentator:
 
         generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
-            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list_cover), total=len(cc_list_cover))]
+            data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list_cover),
+                                         total=len(cc_list_cover))]
         system_polygons = [poly for p_data in data for poly in p_data]
 
         polys_to_remove = []
@@ -412,34 +361,56 @@ class Segmentator:
         return poly_dict
 
 
-def cc_cover(cc_list, pred_list, cover=0.9, img_width=10000, use_pred_as_start=False):
-    point_list = []
-    ccs_medium_height = [np.mean(cc, axis=0)[0] for cc in cc_list]
-    pred_cc_medium_heights = [np.mean(cc, axis=0)[0] for cc in pred_list]
-    cc_list_array = [np.array(cc) for cc in cc_list]
-    pred_list_array = [np.array(cc) for cc in pred_list]
-    cc_1d_list = [convert_2darray_to_1darray(cc, img_width) for cc in cc_list_array]
-    pred_1d_list = [convert_2darray_to_1darray(cc, img_width) for cc in pred_list_array]
-    for pred_cc_indc, pred_cc in enumerate(pred_1d_list):
-        pred_cc_medium_height = pred_cc_medium_heights[pred_cc_indc]
-        pp_list = []
-        if use_pred_as_start:
-            pp_list.append(pred_list_array[pred_cc_indc])
-        for cc_indc, cc in enumerate(cc_1d_list):
-            cc_medium_height = ccs_medium_height[cc_indc]
-            if abs(cc_medium_height - pred_cc_medium_height) > 50:
-                continue
-            C, pred_ind, cc_ind = np.intersect1d(pred_cc, cc, return_indices=True)
-            if cc_ind.size != 0:
-                if float(len(cc_ind)) / float(len(cc)) > cover:
-                    pp_list.append(cc_list_array[cc_indc])
-                else:
-                    pred_cc_arr = pred_list_array[pred_cc_indc]
-                    pp_list.append(pred_cc_arr[pred_ind])
-        if len(pp_list) > 0:
-            point_list.append(pp_list)
-    return point_list
+def generate_music_region(staff_polygons, staffs, distance):
+    poly_avg_height = [x.centroid.y for x in staff_polygons]
+    def cluster(data, maxgap):
+        '''Arrange data into groups where successive elements
+           differ by no more than *maxgap*
+        '''
+        data.sort()
+        groups = [[data[0]]]
+        for x in data[1:]:
+            if abs(x - groups[-1][-1]) <= maxgap:
+                groups[-1].append(x)
+            else:
+                groups.append([x])
+        return groups
 
+    music_regions = []
+    staff_regions = []
+    for x in cluster(poly_avg_height, distance):
+        region = []
+        line_regions = []
+        for y in x:
+            region.append(staff_polygons[poly_avg_height.index(y)])
+            line_regions.append(staffs[poly_avg_height.index(y)])
+        music_regions.append(region)
+        if len(line_regions) > 1:
+            staff_regions.append(list(zip(*line_regions)))
+        else:
+            staff_regions.append(line_regions)
+    music_region = [MusicRegion(x, y) for x, y in zip(music_regions, staff_regions)]
+    music_regions = MusicRegions(music_region, staffs)
+    return music_regions
+
+
+def remove_polys_within_polys(polygons):
+    polys_to_remove = []
+    for ind1, poly in enumerate(polygons):
+        for ind2, poly2 in enumerate(polygons):
+            if ind1 != ind2:
+                if poly2.contains(poly):
+                    polys_to_remove.append(ind1)
+
+    for ind in reversed(polys_to_remove):
+        del polygons[ind]
+    return polygons
+
+
+def remove_polys_smaller_than(polygons, pr):
+    average_text_area = np.mean([x.area for x in polygons])
+    polygons = [x for x in polygons if x.area / average_text_area > pr]
+    return polygons
 
 def bbox1(img):
     a = np.where(img != 0)
@@ -467,19 +438,17 @@ def create_data(path, line_space_height):
 def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0, union=False):
     points = np.array(list(chain.from_iterable(cc)))
     if len(points) < 4:
-        pass
+        return []
     edges = alpha_shape(points, alpha)
     polys = polygons(edges)
     polys = [np.flip(points[poly], axis=1) for poly in polys]
     polygons_paths = []
     for poly in polys:
         poly = Polygon(poly)
-        poly = poly.simplify(0.8)
         poly_buffered = poly.buffer(buffer_size)
         if poly_buffered.geom_type == 'MultiPolygon':
             poly_buffered = poly
-        polygons_paths.append(poly)
-        x = poly.exterior
+        polygons_paths.append(poly_buffered)
     if union is True:
         return [cascaded_union(polygons_paths)]
     return polygons_paths
@@ -599,6 +568,34 @@ def alpha_shape(points, alpha, only_outer=True):
     return edges
 
 
+def cc_cover(cc_list, pred_list, cover=0.9, img_width=10000, use_pred_as_start=False):
+    point_list = []
+    ccs_medium_height = [np.mean(cc, axis=0)[0] for cc in cc_list]
+    pred_cc_medium_heights = [np.mean(cc, axis=0)[0] for cc in pred_list]
+    cc_list_array = [np.array(cc) for cc in cc_list]
+    pred_list_array = [np.array(cc) for cc in pred_list]
+    cc_1d_list = [convert_2darray_to_1darray(cc, img_width) for cc in cc_list_array]
+    pred_1d_list = [convert_2darray_to_1darray(cc, img_width) for cc in pred_list_array]
+    for pred_cc_indc, pred_cc in enumerate(pred_1d_list):
+        pred_cc_medium_height = pred_cc_medium_heights[pred_cc_indc]
+        pp_list = []
+        if use_pred_as_start:
+            pp_list.append(pred_list_array[pred_cc_indc])
+        for cc_indc, cc in enumerate(cc_1d_list):
+            cc_medium_height = ccs_medium_height[cc_indc]
+            if abs(cc_medium_height - pred_cc_medium_height) > 50:
+                continue
+            C, pred_ind, cc_ind = np.intersect1d(pred_cc, cc, return_indices=True)
+            if cc_ind.size != 0:
+                if float(len(cc_ind)) / float(len(cc)) > cover:
+                    pp_list.append(cc_list_array[cc_indc])
+                else:
+                    pred_cc_arr = pred_list_array[pred_cc_indc]
+                    pp_list.append(pred_cc_arr[pred_ind])
+        if len(pp_list) > 0:
+            point_list.append(pp_list)
+    return point_list
+
 def check_for_intersection(l1, l2):
     p1 = l1[0]
     p2 = l1[1]
@@ -617,8 +614,6 @@ def check_for_intersection(l1, l2):
     if 0 <= u <= 1 and 0 <= t <= 1:
         return True
 
-    #px = x1 + t*(x2 - x1)
-    #py = y1 + t*(y2 - y1)
     return False
 
 
@@ -638,8 +633,7 @@ if __name__ == "__main__":
     model_path = os.path.join(project_dir, 'demo/models/model')
     page_path = os.path.join(project_dir, 'demo/images/Graduel_de_leglise_de_Nevers-509.nrm.png')
     staff_path = os.path.join(project_dir, 'demo/staffs/Graduel_de_leglise_de_Nevers-509.staffs')
-    text_extractor_settings = SegmentationSettings(debug=True, cover=0.3, erode=False)\
-     #   ,                                                     model=model_path)
+    text_extractor_settings = SegmentationSettings(debug=True)
     with open(staff_path, 'rb') as f:
         _staffs = pickle.load(f)
     text_extractor = Segmentator(text_extractor_settings)
