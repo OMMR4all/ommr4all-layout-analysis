@@ -2,7 +2,7 @@ from pagesegmentation.lib.predictor import Predictor, PredictSettings
 from pagesegmentation.lib.dataset import DatasetLoader, SingleData
 import numpy as np
 from typing import Generator
-from scipy import misc
+from skimage.transform import resize
 
 
 class PCPredictor:
@@ -17,6 +17,6 @@ class PCPredictor:
             [SingleData(binary_path=i.path, image_path=i.path, line_height_px= i.height) for i in images]
         )
         for i, pred in enumerate(self.predictor.predict(data)):
-            pred = misc.imresize(pred[0][pred[2].xpad:, pred[2].ypad:], pred[2].original_shape, interp="nearest")
+            pred = resize(pred[0][pred[2].xpad:, pred[2].ypad:], pred[2].original_shape, interp="nearest")
             yield pred
 

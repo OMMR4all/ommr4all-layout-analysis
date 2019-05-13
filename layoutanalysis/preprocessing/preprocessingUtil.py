@@ -1,7 +1,7 @@
 import cv2
 from collections import defaultdict
 import numpy as np
-import peakutils
+#import peakutils
 from scipy.signal import medfilt2d
 from itertools import tee
 
@@ -118,6 +118,7 @@ def calculate_horizontal_runs(img: np.array, min_length: int):
             for x in range(xo, xo + rl):
                 np_matrix[y, x] = 255
     return np_matrix
+
 
 if __name__ == "__main__":
     l = np.array([[1,2],[2,4], [2,1]])

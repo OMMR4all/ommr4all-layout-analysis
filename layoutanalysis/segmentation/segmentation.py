@@ -446,6 +446,8 @@ def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0, union=False):
     for poly in polys:
         poly = Polygon(poly)
         poly_buffered = poly.buffer(buffer_size)
+        poly_buffered = poly_buffered.simplify(1, preserve_topology=False)
+
         if poly_buffered.geom_type == 'MultiPolygon':
             poly_buffered = poly
         polygons_paths.append(poly_buffered)
@@ -596,6 +598,7 @@ def cc_cover(cc_list, pred_list, cover=0.9, img_width=10000, use_pred_as_start=F
             point_list.append(pp_list)
     return point_list
 
+
 def check_for_intersection(l1, l2):
     p1 = l1[0]
     p2 = l1[1]
@@ -624,11 +627,11 @@ def box_blur(img, radiusc, radiusr):
     image = convolve1d(image, filterc, axis = 1)
     return image
 
+
 if __name__ == "__main__":
     import pickle
     import os
     from layoutanalysis.preprocessing.preprocessingUtil import vertical_runs
-
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     model_path = os.path.join(project_dir, 'demo/models/model')
     page_path = os.path.join(project_dir, 'demo/images/Graduel_de_leglise_de_Nevers-509.nrm.png')
