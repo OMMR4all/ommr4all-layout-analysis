@@ -1,7 +1,7 @@
 from layoutanalysis.pixelclassifier.predictor import PCPredictor
 from pagesegmentation.lib.predictor import PredictSettings
 from layoutanalysis.removal.dummy_staff_line_removal import staff_removal
-from layoutanalysis.preprocessing.preprocessingUtil import extract_connected_components, convert_2darray_to_1darray
+from layoutanalysis.preprocessing.preprocessingUtil import extract_connected_components
 from layoutanalysis.segmentation.musicRegion import MusicRegion, MusicRegions
 from PIL import Image
 import matplotlib.pyplot as plt

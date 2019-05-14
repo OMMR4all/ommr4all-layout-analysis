@@ -1,6 +1,8 @@
 from shapely.geometry import Polygon
 from scipy.spatial import Delaunay
+from layoutanalysis.preprocessing.preprocessingUtil import convert_2darray_to_1darray
 import numpy as np
+import peakutils
 
 
 def alpha_shape(points, alpha, only_outer=True):
