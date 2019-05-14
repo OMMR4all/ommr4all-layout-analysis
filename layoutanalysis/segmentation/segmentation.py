@@ -243,7 +243,6 @@ class Segmentator:
         text_polygons = [poly for poly in data]
         text_polygons = remove_polys_within_polys(text_polygons)
         text_polygons = remove_polys_smaller_than_threshold(text_polygons, 0.1)
-
         data = generate_polygons_from__ccs(lyric_cc, alpha=distance / 2.3)
         lyric_polygons = [poly for poly in data]
         lyric_polygons = remove_polys_within_polys(lyric_polygons)
@@ -410,7 +409,7 @@ def remove_polys_within_polys(polygons):
 def remove_polys_smaller_than_threshold(__polygons, threshold):
     average_text_area = np.mean([x.area for x in __polygons])
     __polygons = [x for x in __polygons if x.area / average_text_area > threshold]
-    return polygons
+    return __polygons
 
 
 def bbox1(img):
