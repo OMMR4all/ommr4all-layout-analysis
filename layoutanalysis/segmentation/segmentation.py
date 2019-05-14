@@ -22,6 +22,7 @@ import math
 from scipy.ndimage import gaussian_filter
 import cv2
 from layoutanalysis.segmentation.segmentation_utility import alpha_shape, cc_cover
+from layoutanalysis.preprocessing.preprocessingUtil import vertical_runs
 
 
 @dataclass
