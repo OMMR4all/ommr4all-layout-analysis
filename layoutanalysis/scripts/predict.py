@@ -49,7 +49,7 @@ def main():
     )
     text_extractor = Segmentator(settings)
 
-    for _ in text_extractor.segmentate([staffs_file_paths], [gray_file_paths]):
+    for _ in text_extractor.segment([staffs_file_paths], [gray_file_paths]):
         pass
 if __name__ == "__main__":
     main()

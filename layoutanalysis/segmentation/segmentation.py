@@ -2,12 +2,10 @@ from layoutanalysis.pixelclassifier.predictor import PCPredictor
 from pagesegmentation.lib.predictor import PredictSettings
 from layoutanalysis.removal.dummy_staff_line_removal import staff_removal
 from layoutanalysis.preprocessing.preprocessingUtil import extract_connected_components, convert_2darray_to_1darray
-from layoutanalysis.preprocessing.preprocessingUtil import vertical_runs
 from layoutanalysis.segmentation.musicRegion import MusicRegion, MusicRegions
 from PIL import Image
 import matplotlib.pyplot as plt
 from itertools import chain
-from scipy.spatial import Delaunay
 import numpy as np
 from scipy.ndimage.morphology import binary_erosion, binary_dilation
 from layoutanalysis.datatypes.datatypes import ImageData
@@ -19,12 +17,12 @@ import tqdm
 from functools import partial
 from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
 from shapely.geometry import Polygon
-from shapely.ops import cascaded_union
-from scipy.ndimage.filters import convolve1d
 from scipy.interpolate import interpolate
 import math
 from scipy.ndimage import gaussian_filter
 import cv2
+from layoutanalysis.segmentation.segmentation_utility import alpha_shape, cc_cover
+
 
 @dataclass
 class SegmentationSettings:
@@ -53,14 +51,14 @@ class Segmentator:
             )
             self.predictor = PCPredictor(pcsettings, self.settings.targetLineSpaceHeight)
 
-    def segmentate(self, staffs, img_paths):
-        create_data_partital = partial(create_data, line_space_height=self.settings.lineSpaceHeight)
+    def segment(self, staffs, img_paths):
+        create_data_partial = partial(create_data, line_space_height=self.settings.lineSpaceHeight)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
-            data = [v for v in tqdm.tqdm(p.imap(create_data_partital, img_paths), total=len(img_paths))]
+            data = [v for v in tqdm.tqdm(p.imap(create_data_partial, img_paths), total=len(img_paths))]
         for i_ind, i in enumerate(zip(staffs, data)):
-            yield self.segmentate_with_weight_image(i[0], i[1])
+            yield self.segment_with_weight_image(i[0], i[1])
 
-    def segmentate_with_weight_image(self, staffs, img_data):
+    def segment_with_weight_image(self, staffs, img_data):
         poly_dict = defaultdict(list)
         staffs.sort(key=lambda staff: staff[0][0][0])
 
@@ -99,23 +97,24 @@ class Segmentator:
         cc_list_with_stats = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
         # separate CCs in music and text
-        def segmentate_cc(cc_list_with_stats, weight_matrix, avg_distance_between_systems, segmentate_capitals=True,
+        def segment_cc(cc_list_with_stats, weight_matrix, avg_distance_between_systems, segment_capitals=True,
                           threshold=0.5):
-            cc_list = cc_list_with_stats[0]
-            cc_list_stats = cc_list_with_stats[1]
-            initials = []
-            cc_list_new = []
-            for cc_ind, cc in enumerate(cc_list):
+            __cc_list = cc_list_with_stats[0]
+            __cc_list_stats = cc_list_with_stats[1]
+            __initials = []
+            __cc_list_new = []
+            for cc_ind, cc in enumerate(__cc_list):
                 y, x = zip(*cc)
                 min_max_difference = np.max(weight_matrix[y, x]) - np.min(weight_matrix[y, x])
 
-                if segmentate_capitals and min_max_difference > 0.5 and cc_list_stats[cc_ind, 3] > avg_distance_between_systems:
-                    initials.append(cc)
+                if segment_capitals and min_max_difference > 0.5 and __cc_list_stats[cc_ind, 3]\
+                        > avg_distance_between_systems:
+                    __initials.append(cc)
                     continue
                 if np.mean(weight_matrix[y, x]) > threshold:
-                    cc_list_new.append(cc)
+                    __cc_list_new.append(cc)
                     continue
-            return cc_list_new, initials
+            return __cc_list_new, __initials
 
         # Divide spaces into groups that reflect systems
         def group_ccs(cc_list, music_regions : MusicRegion):
@@ -154,8 +153,8 @@ class Segmentator:
             return d.values()
 
         # separate CCs in music and text
-        system_ccs, initials = segmentate_cc(cc_list_with_stats, weight, distance,
-                                             segmentate_capitals= self.settings.capitals)
+        system_ccs, initials = segment_cc(cc_list_with_stats, weight, distance,
+                                             segment_capitals= self.settings.capitals)
 
         # Generate polygons enclosing the initials/ capitals
         initials_polygons = []
@@ -168,7 +167,7 @@ class Segmentator:
             poly_dict['initials'].append(poly)
 
         cc_list = group_ccs(system_ccs, music_regions)
-        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance, union=False,
+        generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance,
                                                       buffer_size=2.0)
         # Generate polygons enclosing the systems
         with multiprocessing.Pool(processes=self.settings.processes) as p:
@@ -190,25 +189,25 @@ class Segmentator:
         # divide remaining CCs in lyric/text
         def divide_cc_in_lyric_and_text(ccs, distance_between_staffs, music_regions):
 
-            ccs_stats = ccs[1]
-            lyric_cc = []
-            text_cc = []
+            __ccs_stats = ccs[1]
+            __lyric_cc = []
+            __text_cc = []
 
             for ind, cc in enumerate(ccs[0]):
-                area = ccs_stats[ind, cv2.CC_STAT_AREA]
+                area = __ccs_stats[ind, cv2.CC_STAT_AREA]
                 if area > 10:  # skip small ccs
-                    width = ccs_stats[ind, cv2.CC_STAT_WIDTH]
-                    height = ccs_stats[ind, cv2.CC_STAT_HEIGHT]
-                    top = ccs_stats[ind, cv2.CC_STAT_TOP]
+                    width = __ccs_stats[ind, cv2.CC_STAT_WIDTH]
+                    height = __ccs_stats[ind, cv2.CC_STAT_HEIGHT]
+                    top = __ccs_stats[ind, cv2.CC_STAT_TOP]
 
-                    left = ccs_stats[ind, cv2.CC_STAT_LEFT]
+                    left = __ccs_stats[ind, cv2.CC_STAT_LEFT]
                     avg_y = top + height // 2
                     avg_x = left + width // 2
                     top_poly = music_regions.get_upper_region(avg_y)
                     bot_poly = music_regions.get_lower_region(avg_y)
 
                     if top_poly is None:
-                        text_cc.append(cc)
+                        __text_cc.append(cc)
                         continue
 
                     top_poly_bounds = top_poly.regions[0].bounds
@@ -220,9 +219,9 @@ class Segmentator:
                     if top_border < avg_y < bot_border:
                         if top_poly.get_horizontal_gaps() == 0:
                             if top_poly_bounds[2] > left + width // 2 > top_poly_bounds[0]:
-                                lyric_cc.append(cc)
+                                __lyric_cc.append(cc)
                             else:
-                                text_cc.append(cc)
+                                __text_cc.append(cc)
                         else:
                             lies_between_staffs = False
                             for x in top_poly.get_horizontal_gaps():
@@ -230,25 +229,25 @@ class Segmentator:
                                     lies_between_staffs = True
                                     break
                             if lies_between_staffs:
-                                text_cc.append(cc)
+                                __text_cc.append(cc)
                             else:
-                                lyric_cc.append(cc)
+                                __lyric_cc.append(cc)
 
                     else:
-                        text_cc.append(cc)
-            return lyric_cc, text_cc
+                        __text_cc.append(cc)
+            return __lyric_cc, __text_cc
 
         lyric_cc, text_cc = divide_cc_in_lyric_and_text(processed_image_cc, distance, music_regions)
 
         data = generate_polygons_from__ccs(text_cc, alpha=distance / 2.3)
         text_polygons = [poly for poly in data]
         text_polygons = remove_polys_within_polys(text_polygons)
-        text_polygons = remove_polys_smaller_than(text_polygons, 0.1)
+        text_polygons = remove_polys_smaller_than_threshold(text_polygons, 0.1)
 
         data = generate_polygons_from__ccs(lyric_cc, alpha=distance / 2.3)
         lyric_polygons = [poly for poly in data]
         lyric_polygons = remove_polys_within_polys(lyric_polygons)
-        lyric_polygons = remove_polys_smaller_than(lyric_polygons, 0.1)
+        lyric_polygons = remove_polys_smaller_than_threshold(lyric_polygons, 0.1)
 
         for poly in text_polygons:
             poly_dict['text'].append(poly)
@@ -277,7 +276,7 @@ class Segmentator:
         return poly_dict
 
     # alternative algorithm, outdated
-    def segmentate_image(self, staffs, img_data, region_prediction):
+    def segment_image(self, staffs, img_data, region_prediction):
 
         img = np.array(Image.open(img_data.path)) / 255
         img_data.image = binarize(img)
@@ -363,14 +362,15 @@ class Segmentator:
 
 def generate_music_region(staff_polygons, staffs, distance):
     poly_avg_height = [x.centroid.y for x in staff_polygons]
-    def cluster(data, maxgap):
-        '''Arrange data into groups where successive elements
-           differ by no more than *maxgap*
-        '''
+
+    def cluster(data, max_gap):
+        # Arrange data into groups where successive elements
+        # differ by no more than *max_gap*
+
         data.sort()
         groups = [[data[0]]]
         for x in data[1:]:
-            if abs(x - groups[-1][-1]) <= maxgap:
+            if abs(x - groups[-1][-1]) <= max_gap:
                 groups[-1].append(x)
             else:
                 groups.append([x])
@@ -407,10 +407,11 @@ def remove_polys_within_polys(polygons):
     return polygons
 
 
-def remove_polys_smaller_than(polygons, pr):
-    average_text_area = np.mean([x.area for x in polygons])
-    polygons = [x for x in polygons if x.area / average_text_area > pr]
+def remove_polys_smaller_than_threshold(__polygons, threshold):
+    average_text_area = np.mean([x.area for x in __polygons])
+    __polygons = [x for x in __polygons if x.area / average_text_area > threshold]
     return polygons
+
 
 def bbox1(img):
     a = np.where(img != 0)
@@ -435,24 +436,25 @@ def create_data(path, line_space_height):
     return image_data
 
 
-def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0, union=False):
+def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0):
     points = np.array(list(chain.from_iterable(cc)))
     if len(points) < 4:
         return []
     edges = alpha_shape(points, alpha)
+
+    #edges2, polys = alpha_shape_numpy(points, 0.05)
     polys = polygons(edges)
+    
     polys = [np.flip(points[poly], axis=1) for poly in polys]
     polygons_paths = []
     for poly in polys:
         poly = Polygon(poly)
         poly_buffered = poly.buffer(buffer_size)
         poly_buffered = poly_buffered.simplify(1, preserve_topology=False)
-
         if poly_buffered.geom_type == 'MultiPolygon':
             poly_buffered = poly
         polygons_paths.append(poly_buffered)
-    if union is True:
-        return [cascaded_union(polygons_paths)]
+
     return polygons_paths
 
 
@@ -480,6 +482,7 @@ def draw_polygons(_polygons, polygon_img):
 
 
 def polygons(edges):
+    # Generates polygons from Delaunay edges
     if len(edges) == 0:
         return []
 
@@ -520,114 +523,6 @@ def polygons(edges):
     return shapes
 
 
-def alpha_shape(points, alpha, only_outer=True):
-    """
-    Compute the alpha shape (concave hull) of a set of points.
-    :param points: np.array of shape (n,2) points.
-    :param alpha: alpha value.
-    :param only_outer: boolean value to specify if we keep only the outer border
-    or also inner edges.
-    :return: set of (i,j) pairs representing edges of the alpha-shape. (i,j) are
-    the indices in the points array.
-    """
-    assert points.shape[0] > 3, "Need at least four points"
-
-    def add_edge(edges, i, j):
-        """
-        Add a line between the i-th and j-th points,
-        if not in the list already
-        """
-        if (i, j) in edges or (j, i) in edges:
-            # already added
-            assert (j, i) in edges, "Can't go twice over same directed edge right?"
-            if only_outer:
-                # if both neighboring triangles are in shape, it's not a boundary edge
-                edges.remove((j, i))
-            return
-        edges.add((i, j))
-
-    tri = Delaunay(points)
-    edges = set()
-    # Loop over triangles:
-    # ia, ib, ic = indices of corner points of the triangle
-    for ia, ib, ic in tri.vertices:
-        pa = points[ia]
-        pb = points[ib]
-        pc = points[ic]
-        # Computing radius of triangle circumcircle
-        # www.mathalino.com/reviewer/derivation-of-formulas/derivation-of-formula-for-radius-of-circumcircle
-        a = np.sqrt((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2)
-        b = np.sqrt((pb[0] - pc[0]) ** 2 + (pb[1] - pc[1]) ** 2)
-        c = np.sqrt((pc[0] - pa[0]) ** 2 + (pc[1] - pa[1]) ** 2)
-        s = (a + b + c) / 2.0
-        area = np.sqrt(s * (s - a) * (s - b) * (s - c))
-        circum_r = a * b * c / (4.0 * area)
-
-        if circum_r < alpha:
-            add_edge(edges, ia, ib)
-            add_edge(edges, ib, ic)
-            add_edge(edges, ic, ia)
-    return edges
-
-
-def cc_cover(cc_list, pred_list, cover=0.9, img_width=10000, use_pred_as_start=False):
-    point_list = []
-    ccs_medium_height = [np.mean(cc, axis=0)[0] for cc in cc_list]
-    pred_cc_medium_heights = [np.mean(cc, axis=0)[0] for cc in pred_list]
-    cc_list_array = [np.array(cc) for cc in cc_list]
-    pred_list_array = [np.array(cc) for cc in pred_list]
-    cc_1d_list = [convert_2darray_to_1darray(cc, img_width) for cc in cc_list_array]
-    pred_1d_list = [convert_2darray_to_1darray(cc, img_width) for cc in pred_list_array]
-    for pred_cc_indc, pred_cc in enumerate(pred_1d_list):
-        pred_cc_medium_height = pred_cc_medium_heights[pred_cc_indc]
-        pp_list = []
-        if use_pred_as_start:
-            pp_list.append(pred_list_array[pred_cc_indc])
-        for cc_indc, cc in enumerate(cc_1d_list):
-            cc_medium_height = ccs_medium_height[cc_indc]
-            if abs(cc_medium_height - pred_cc_medium_height) > 50:
-                continue
-            C, pred_ind, cc_ind = np.intersect1d(pred_cc, cc, return_indices=True)
-            if cc_ind.size != 0:
-                if float(len(cc_ind)) / float(len(cc)) > cover:
-                    pp_list.append(cc_list_array[cc_indc])
-                else:
-                    pred_cc_arr = pred_list_array[pred_cc_indc]
-                    pp_list.append(pred_cc_arr[pred_ind])
-        if len(pp_list) > 0:
-            point_list.append(pp_list)
-    return point_list
-
-
-def check_for_intersection(l1, l2):
-    p1 = l1[0]
-    p2 = l1[1]
-    p3 = l2[0]
-    p4 = l2[1]
-    x1, y1 = p1[0], p1[1]
-    x2, y2 = p2[0], p2[1]
-    x3, y3 = p3[0], p3[1]
-    x4, y4 = p4[0], p4[1]
-
-    denominator = (x1 - x2)*(y3 - y4) - (y1 - y2)*(x3 - x4)
-    if denominator == 0:
-        return False
-    t = ((x1 - x3)*(y3 - y4) - (y1 - y3)*(x3 - x4)) / denominator
-    u = -(((x1-x2)*(y1 - y3) - (y1-y2)*(x1-x3)) / denominator)
-    if 0 <= u <= 1 and 0 <= t <= 1:
-        return True
-
-    return False
-
-
-def box_blur(img, radiusc, radiusr):
-    filterr = np.ones(radiusr * 1) / radiusr
-    filterc = np.ones(radiusc * 1) / radiusc
-    image = convolve1d(img, filterr, axis = 0)
-    image = convolve1d(image, filterc, axis = 1)
-    return image
-
-
 if __name__ == "__main__":
     import pickle
     import os
@@ -640,5 +535,5 @@ if __name__ == "__main__":
     with open(staff_path, 'rb') as f:
         _staffs = pickle.load(f)
     text_extractor = Segmentator(text_extractor_settings)
-    for _ in text_extractor.segmentate([_staffs], [page_path]):
+    for _ in text_extractor.segment([_staffs], [page_path]):
         pass

@@ -4,6 +4,7 @@ import numpy as np
 #import peakutils
 from scipy.signal import medfilt2d
 from itertools import tee
+from scipy.ndimage.filters import convolve1d
 
 
 def extract_connected_components(image):
@@ -119,6 +120,12 @@ def calculate_horizontal_runs(img: np.array, min_length: int):
                 np_matrix[y, x] = 255
     return np_matrix
 
+def box_blur(img, radiusc, radiusr):
+    filterr = np.ones(radiusr * 1) / radiusr
+    filterc = np.ones(radiusc * 1) / radiusc
+    image = convolve1d(img, filterr, axis = 0)
+    image = convolve1d(image, filterc, axis = 1)
+    return image
 
 if __name__ == "__main__":
     l = np.array([[1,2],[2,4], [2,1]])
