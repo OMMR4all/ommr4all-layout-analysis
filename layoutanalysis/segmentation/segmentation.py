@@ -23,6 +23,7 @@ from scipy.ndimage import gaussian_filter
 import cv2
 from layoutanalysis.segmentation.segmentation_utility import alpha_shape, cc_cover
 from layoutanalysis.preprocessing.preprocessingUtil import vertical_runs
+from layoutanalysis.segmentation.segmentation_callback import SegmentationCallback, SegmentationDummyCallback
 
 
 @dataclass
@@ -39,7 +40,7 @@ class SegmentationSettings:
 
 
 class Segmentator:
-    def __init__(self, settings: SegmentationSettings):
+    def __init__(self, settings: SegmentationSettings, callback):
         self.predictor = None
         self.settings = settings
         if self.settings.model:
@@ -51,13 +52,19 @@ class Segmentator:
                 high_res_output=False
             )
             self.predictor = PCPredictor(pcsettings, self.settings.targetLineSpaceHeight)
+        if callback is None:
+            self.callback: SegmentationCallback = SegmentationCallback()
+        else:
+            self.callback: SegmentationCallback = callback
 
     def segment(self, staffs, img_paths):
         create_data_partial = partial(create_data, line_space_height=self.settings.lineSpaceHeight)
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(create_data_partial, img_paths), total=len(img_paths))]
         for i_ind, i in enumerate(zip(staffs, data)):
+            self.callback.reset_page_state()
             yield self.segment_with_weight_image(i[0], i[1])
+            self.callback.update_total_state()
 
     def segment_with_weight_image(self, staffs, img_data):
         poly_dict = defaultdict(list)
@@ -65,22 +72,27 @@ class Segmentator:
 
         img = np.array(Image.open(img_data.path)) / 255
         img_data.image = binarize(img)
-
+        self.callback.update_current_page_state()
         if self.settings.erode:
             img_data.image = binary_dilation(img_data.image, structure=np.full((1, 3), 1))
 
         staff_image = np.zeros(img_data.image.shape)
         staff_polygons = [generate_polygon_from_staff(staff) for staff in staffs]
         staff_img = draw_polygons(staff_polygons, staff_image)
+        self.callback.update_current_page_state()
+
         distance = vertical_runs(staff_img)[1]
+        self.callback.update_current_page_state()
 
         music_regions = generate_music_region(staff_polygons, staffs, distance)
+        self.callback.update_current_page_state()
 
-        # genearte weight image
+        # generate weight image
         weight = gaussian_filter(staff_img, sigma=(distance * 2 / 4, distance * 2 / 4))
         weight[staff_img == 1] = 1
+        self.callback.update_current_page_state()
 
-        # cut out peripherie
+        # cut out peripheries
         rmin, rmax, cmin, cmax = bbox2(staff_img)
         rmin = rmin - rmin // 10
         rmax = rmax + (staff_img.shape[0] - rmax) // 5
@@ -93,6 +105,7 @@ class Segmentator:
 
         # remove staff lines
         processed_image = staff_removal(staffs, processed_image, 3)
+        self.callback.update_current_page_state()
 
         # extract remaining CCs
         cc_list_with_stats = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
@@ -156,6 +169,7 @@ class Segmentator:
         # separate CCs in music and text
         system_ccs, initials = segment_cc(cc_list_with_stats, weight, distance,
                                              segment_capitals= self.settings.capitals)
+        self.callback.update_current_page_state()
 
         # Generate polygons enclosing the initials/ capitals
         initials_polygons = []
@@ -168,8 +182,12 @@ class Segmentator:
             poly_dict['initials'].append(poly)
 
         cc_list = group_ccs(system_ccs, music_regions)
+        self.callback.update_current_page_state()
+
         generate_polygons_from__ccs_partial = partial(generate_polygons_from__ccs, alpha=distance,
                                                       buffer_size=2.0)
+        self.callback.update_current_page_state()
+
         # Generate polygons enclosing the systems
         with multiprocessing.Pool(processes=self.settings.processes) as p:
             data = [v for v in tqdm.tqdm(p.imap(generate_polygons_from__ccs_partial, cc_list), total=len(cc_list))]
@@ -177,12 +195,14 @@ class Segmentator:
         system_polygons = remove_polys_within_polys(system_polygons)
         for poly in system_polygons:
             poly_dict['system'].append(poly)
+        self.callback.update_current_page_state()
 
         # Remove capital and system CCs
         text_image = np.zeros(img_data.image.shape)
         text_image = draw_polygons(poly_dict['system'], text_image)
         text_image = draw_polygons(poly_dict['initials'], text_image)
         processed_image = np.clip(processed_image + text_image, 0, 1)
+        self.callback.update_current_page_state()
 
         # extract remaining CCs
         processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
@@ -239,22 +259,28 @@ class Segmentator:
             return __lyric_cc, __text_cc
 
         lyric_cc, text_cc = divide_cc_in_lyric_and_text(processed_image_cc, distance, music_regions)
+        self.callback.update_current_page_state()
 
         data = generate_polygons_from__ccs(text_cc, alpha=distance / 2.3)
         text_polygons = [poly for poly in data]
         text_polygons = remove_polys_within_polys(text_polygons)
         text_polygons = remove_polys_smaller_than_threshold(text_polygons, 0.1)
+        self.callback.update_current_page_state()
+
         data = generate_polygons_from__ccs(lyric_cc, alpha=distance / 2.3)
         lyric_polygons = [poly for poly in data]
         lyric_polygons = remove_polys_within_polys(lyric_polygons)
         lyric_polygons = remove_polys_smaller_than_threshold(lyric_polygons, 0.1)
+        self.callback.update_current_page_state()
 
         for poly in text_polygons:
             poly_dict['text'].append(poly)
         for poly in lyric_polygons:
             poly_dict['lyrics'].append(poly)
+        self.callback.update_current_page_state()
 
         if self.settings.debug:
+            print('Generating debug image')
             lyric_image = np.zeros(img_data.image.shape)
             text_image = np.zeros(img_data.image.shape)
             initials_image = np.zeros(img_data.image.shape)
@@ -270,7 +296,6 @@ class Segmentator:
             og_image[np.where(initials_image == 255)] = og_image[np.where(initials_image == 255)] * [0.8, 0.4, 1]
             og_image[np.where(system_image == 255)] = og_image[np.where(system_image == 255)] * [0.3, 1, 0.3]
 
-            print('Generating debug image')
             plt.imshow(og_image)
             plt.show()
         return poly_dict
@@ -534,6 +559,7 @@ if __name__ == "__main__":
     text_extractor_settings = SegmentationSettings(debug=True)
     with open(staff_path, 'rb') as f:
         _staffs = pickle.load(f)
-    text_extractor = Segmentator(text_extractor_settings)
+    callback = SegmentationDummyCallback()
+    text_extractor = Segmentator(text_extractor_settings, callback)
     for _ in text_extractor.segment([_staffs], [page_path]):
         pass
