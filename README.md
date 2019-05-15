@@ -1,5 +1,5 @@
 # OMMR4all-layout-analysis on historical handwritten music documents
-
+Line layout analysis algorithms for the OMMR4all project. The tool uses the output of https://gitlab2.informatik.uni-wuerzburg.de/OMMR4all/ommr4all-line-detection to segment the provided image in several regions.
 
 ## Prerequisites
 Dependencies for the project are located in requirement.txt.<br />
@@ -41,7 +41,7 @@ For a full list type `layout-analysis-predict --help`
 
 ## Example
 
-Input             |  Predicted Lines
+Input             |  Predicted Regions
 :-------------------------:|:-------------------------:|
 ![Input](layoutanalysis/demo/images/readme/input.png) | ![Prediction](layoutanalysis/demo/images/readme/output.png)
  
