@@ -49,6 +49,7 @@ def convert_2darray_to_1darray(array, width):
 
 
 def get_text_borders(image, preprocess=False, min_dist=30, thres=0.3):
+    import peakutils
     med = image.copy()
     if preprocess:
         med = medfilt2d(image, 9)

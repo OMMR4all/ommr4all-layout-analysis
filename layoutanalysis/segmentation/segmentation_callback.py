@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 
 
 class SegmentationCallback:
-    def __init__(self, total_steps=15, total_pages=1):
+    def __init__(self, total_steps: int = 15, total_pages: int = 1):
         super().__init__()
         self.__total_pages = total_pages
         self.__state = 0
@@ -44,6 +44,6 @@ class SegmentationDummyCallback(SegmentationCallback):
         print("Total progress: {} Page progress: {}".format(self.get_progress(), self.get_current_page_progress()))
         pass
 
-    def __init__(self, total_steps=15, total_pages=1):
+    def __init__(self, total_steps: int = 15, total_pages: int = 1):
         super().__init__(total_steps, total_pages)
 

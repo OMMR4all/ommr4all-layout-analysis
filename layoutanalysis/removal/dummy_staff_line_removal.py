@@ -1,9 +1,10 @@
 import numpy as np
 from scipy.interpolate import interpolate
 import math
+from typing import List
 
 
-def staff_removal(staffs_lines, img, line_height):
+def staff_removal(staffs_lines: List[List[List[int]]], img: np.ndarray, line_height: int):
     nimg = np.copy(img)
     h = nimg.shape[0]
     l2 = math.ceil(line_height / 2)

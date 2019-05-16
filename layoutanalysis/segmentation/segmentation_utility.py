@@ -2,10 +2,11 @@ from shapely.geometry import Polygon
 from scipy.spatial import Delaunay
 from layoutanalysis.preprocessing.preprocessingUtil import convert_2darray_to_1darray
 import numpy as np
+from typing import List
 # import peakutils
 
 
-def alpha_shape(points, alpha, only_outer=True):
+def alpha_shape(points: np.ndarray, alpha: int, only_outer: bool = True):
     """
     Compute the alpha shape (concave hull) of a set of points.
     :param points: np.array of shape (n,2) points.
@@ -55,7 +56,7 @@ def alpha_shape(points, alpha, only_outer=True):
     return edges
 
 
-def alpha_shape_numpy(points, alpha):
+def alpha_shape_numpy(points: np.ndarray, alpha: float):
     from shapely import geometry
     from shapely.ops import cascaded_union, polygonize
     """
@@ -75,17 +76,17 @@ def alpha_shape_numpy(points, alpha):
     coords = np.array(points)
     tri = Delaunay(coords)
     triangles = coords[tri.vertices]
-    a = ((triangles[:, 0, 0] - triangles[:, 1, 0]) ** 2 + (triangles[:, 0, 1] - triangles[:,1,1]) ** 2) ** 0.5
-    b = ((triangles[:, 1, 0] - triangles[:, 2, 0]) ** 2 + (triangles[:, 1, 1] - triangles[:,2,1]) ** 2) ** 0.5
-    c = ((triangles[:, 2, 0] - triangles[:, 0, 0]) ** 2 + (triangles[:, 2, 1] - triangles[:,0,1]) ** 2) ** 0.5
-    s = ( a + b + c ) / 2.0
+    a = ((triangles[:, 0, 0] - triangles[:, 1, 0]) ** 2 + (triangles[:, 0, 1] - triangles[:, 1, 1]) ** 2) ** 0.5
+    b = ((triangles[:, 1, 0] - triangles[:, 2, 0]) ** 2 + (triangles[:, 1, 1] - triangles[:, 2, 1]) ** 2) ** 0.5
+    c = ((triangles[:, 2, 0] - triangles[:, 0, 0]) ** 2 + (triangles[:, 2, 1] - triangles[:, 0, 1]) ** 2) ** 0.5
+    s = (a + b + c) / 2.0
     areas = (s*(s-a)*(s-b)*(s-c)) ** 0.5
     circums = a * b * c / (4.0 * areas)
     filtered = triangles[circums < (1.0 / alpha)]
     edge1 = filtered[:, (0, 1)]
     edge2 = filtered[:, (1, 2)]
     edge3 = filtered[:, (2, 0)]
-    edge_points = np.unique(np.concatenate((edge1,edge2,edge3)), axis = 0).tolist()
+    edge_points = np.unique(np.concatenate((edge1, edge2, edge3)), axis = 0).tolist()
 
     m = geometry.MultiLineString(edge_points)
 
@@ -94,7 +95,8 @@ def alpha_shape_numpy(points, alpha):
     return edge_points, triangles
 
 
-def cc_cover(cc_list, pred_list, cover=0.9, img_width=10000, use_pred_as_start=False):
+def cc_cover(cc_list: List[List[int]], pred_list: List[List[int]], cover: float = 0.9,
+             img_width: int = 10000, use_pred_as_start: bool = False):
     point_list = []
     ccs_medium_height = [np.mean(cc, axis=0)[0] for cc in cc_list]
     pred_cc_medium_heights = [np.mean(cc, axis=0)[0] for cc in pred_list]
@@ -123,7 +125,7 @@ def cc_cover(cc_list, pred_list, cover=0.9, img_width=10000, use_pred_as_start=F
     return point_list
 
 
-def check_for_intersection(l1, l2):
+def check_for_intersection(l1: List[int], l2: List[int]):
     p1 = l1[0]
     p2 = l1[1]
     p3 = l2[0]

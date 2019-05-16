@@ -1,29 +1,31 @@
 from layoutanalysis.pixelclassifier.predictor import PCPredictor
 from pagesegmentation.lib.predictor import PredictSettings
 from layoutanalysis.removal.dummy_staff_line_removal import staff_removal
-from layoutanalysis.preprocessing.preprocessingUtil import extract_connected_components
+from layoutanalysis.preprocessing.preprocessingUtil import extract_connected_components, vertical_runs
 from layoutanalysis.segmentation.musicRegion import MusicRegion, MusicRegions
+from layoutanalysis.datatypes.datatypes import ImageData
+from layoutanalysis.segmentation.segmentation_utility import alpha_shape, cc_cover
+from layoutanalysis.segmentation.segmentation_callback import SegmentationCallback, SegmentationDummyCallback
+from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
+
 from PIL import Image
 import matplotlib.pyplot as plt
 from itertools import chain
 import numpy as np
 from scipy.ndimage.morphology import binary_erosion, binary_dilation
-from layoutanalysis.datatypes.datatypes import ImageData
 from dataclasses import dataclass
 from collections import defaultdict
 from skimage.draw import polygon
 import multiprocessing
 import tqdm
 from functools import partial
-from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
 from shapely.geometry import Polygon
 from scipy.interpolate import interpolate
 import math
 from scipy.ndimage import gaussian_filter
 import cv2
-from layoutanalysis.segmentation.segmentation_utility import alpha_shape, cc_cover
-from layoutanalysis.preprocessing.preprocessingUtil import vertical_runs
-from layoutanalysis.segmentation.segmentation_callback import SegmentationCallback, SegmentationDummyCallback
+
+from typing import List
 
 
 @dataclass
@@ -40,7 +42,7 @@ class SegmentationSettings:
 
 
 class Segmentator:
-    def __init__(self, settings: SegmentationSettings, callback):
+    def __init__(self, settings: SegmentationSettings, callback: SegmentationCallback):
         self.predictor = None
         self.settings = settings
         if self.settings.model:
@@ -66,7 +68,7 @@ class Segmentator:
             yield self.segment_with_weight_image(i[0], i[1])
             self.callback.update_total_state()
 
-    def segment_with_weight_image(self, staffs, img_data):
+    def segment_with_weight_image(self, staffs: List[List[List[int]]], img_data: np.ndarray):
         poly_dict = defaultdict(list)
         staffs.sort(key=lambda staff: staff[0][0][0])
 
@@ -111,8 +113,9 @@ class Segmentator:
         cc_list_with_stats = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
         # separate CCs in music and text
-        def segment_cc(cc_list_with_stats, weight_matrix, avg_distance_between_systems, segment_capitals=True,
-                          threshold=0.5):
+        def segment_cc(cc_list_with_stats: List[List[List[int]]], weight_matrix: np.ndarray,
+                       avg_distance_between_systems: float, segment_capitals: bool = True,
+                       threshold: float = 0.5):
             __cc_list = cc_list_with_stats[0]
             __cc_list_stats = cc_list_with_stats[1]
             __initials = []
@@ -131,7 +134,7 @@ class Segmentator:
             return __cc_list_new, __initials
 
         # Divide spaces into groups that reflect systems
-        def group_ccs(cc_list, music_regions : MusicRegion):
+        def group_ccs(cc_list: List[List[int]], music_regions : MusicRegion):
             d = defaultdict(list)
             for cc_ind, cc in enumerate(cc_list):
                 avg_cc_height = np.mean([cc[-1][0], cc[0][0]])
@@ -168,7 +171,8 @@ class Segmentator:
 
         # separate CCs in music and text
         system_ccs, initials = segment_cc(cc_list_with_stats, weight, distance,
-                                             segment_capitals= self.settings.capitals)
+                                          segment_capitals=self.settings.capitals)
+
         self.callback.update_current_page_state()
 
         # Generate polygons enclosing the initials/ capitals
@@ -208,7 +212,7 @@ class Segmentator:
         processed_image_cc = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
         # divide remaining CCs in lyric/text
-        def divide_cc_in_lyric_and_text(ccs, distance_between_staffs, music_regions):
+        def divide_cc_in_lyric_and_text(ccs: List[List[int]], distance_between_staffs, music_regions: music_regions):
 
             __ccs_stats = ccs[1]
             __lyric_cc = []
@@ -301,7 +305,7 @@ class Segmentator:
         return poly_dict
 
     # alternative algorithm, outdated
-    def segment_image(self, staffs, img_data, region_prediction):
+    def segment_image(self, staffs: List[List[List[int]]], img_data: np.ndarray, region_prediction: np.ndarray):
 
         img = np.array(Image.open(img_data.path)) / 255
         img_data.image = binarize(img)
@@ -385,7 +389,7 @@ class Segmentator:
         return poly_dict
 
 
-def generate_music_region(staff_polygons, staffs, distance):
+def generate_music_region(staff_polygons: List[Polygon], staffs: List[List[List[int]]], distance: float):
     poly_avg_height = [x.centroid.y for x in staff_polygons]
 
     def cluster(data, max_gap):
@@ -419,7 +423,7 @@ def generate_music_region(staff_polygons, staffs, distance):
     return music_regions
 
 
-def remove_polys_within_polys(polygons):
+def remove_polys_within_polys(polygons: List[Polygon]):
     polys_to_remove = []
     for ind1, poly in enumerate(polygons):
         for ind2, poly2 in enumerate(polygons):
@@ -432,19 +436,19 @@ def remove_polys_within_polys(polygons):
     return polygons
 
 
-def remove_polys_smaller_than_threshold(__polygons, threshold):
+def remove_polys_smaller_than_threshold(__polygons: List[Polygon], threshold: float):
     average_text_area = np.mean([x.area for x in __polygons])
     __polygons = [x for x in __polygons if x.area / average_text_area > threshold]
     return __polygons
 
 
-def bbox1(img):
+def bbox1(img: np.ndarray):
     a = np.where(img != 0)
     bbox = np.min(a[0]), np.max(a[0]), np.min(a[1]), np.max(a[1])
     return bbox
 
 
-def bbox2(img):
+def bbox2(img: np.ndarray):
     rows = np.any(img, axis=1)
     cols = np.any(img, axis=0)
     rmin, rmax = np.where(rows)[0][[0, -1]]
@@ -453,7 +457,7 @@ def bbox2(img):
     return rmin, rmax, cmin, cmax
 
 
-def create_data(path, line_space_height):
+def create_data(path: str, line_space_height: int):
     space_height = line_space_height
     if line_space_height == 0:
         space_height = vertical_runs(binarize(np.array(Image.open(path)) / 255))[0]
@@ -461,13 +465,13 @@ def create_data(path, line_space_height):
     return image_data
 
 
-def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0):
+def generate_polygons_from__ccs(cc, alpha: int = 15, buffer_size: float = 1.0):
     points = np.array(list(chain.from_iterable(cc)))
     if len(points) < 4:
         return []
     edges = alpha_shape(points, alpha)
 
-    #edges2, polys = alpha_shape_numpy(points, 0.05)
+    # edges2, polys = alpha_shape_numpy(points, 0.05)
     polys = polygons(edges)
     
     polys = [np.flip(points[poly], axis=1) for poly in polys]
@@ -483,7 +487,7 @@ def generate_polygons_from__ccs(cc, alpha=15, buffer_size=1.0):
     return polygons_paths
 
 
-def generate_polygon_from_staff(staff):
+def generate_polygon_from_staff(staff: List[List[int]]):
     first_line = list(map(list, staff[0]))
 
     first_line[0][1] = first_line[0][1] + -5
@@ -498,7 +502,7 @@ def generate_polygon_from_staff(staff):
     return Polygon(_polygon)
 
 
-def draw_polygons(_polygons, polygon_img):
+def draw_polygons(_polygons: List[Polygon], polygon_img: np.ndarray):
     for _poly in _polygons:
         x, y = _poly.exterior.xy
         rr, cc = polygon(y, x)
@@ -506,7 +510,7 @@ def draw_polygons(_polygons, polygon_img):
     return polygon_img
 
 
-def polygons(edges):
+def polygons(edges: List[int]):
     # Generates polygons from Delaunay edges
     if len(edges) == 0:
         return []
@@ -559,7 +563,7 @@ if __name__ == "__main__":
     text_extractor_settings = SegmentationSettings(debug=True)
     with open(staff_path, 'rb') as f:
         _staffs = pickle.load(f)
-    callback = SegmentationDummyCallback()
-    text_extractor = Segmentator(text_extractor_settings, callback)
+    t_callback = SegmentationDummyCallback()
+    text_extractor = Segmentator(text_extractor_settings, t_callback)
     for _ in text_extractor.segment([_staffs], [page_path]):
         pass
