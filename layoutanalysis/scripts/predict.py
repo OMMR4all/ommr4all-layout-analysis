@@ -1,7 +1,6 @@
 import argparse
 import glob
 from layoutanalysis.segmentation.segmentation import SegmentationSettings, Segmentator
-import tqdm
 
 
 def glob_all(filenames):
@@ -51,5 +50,7 @@ def main():
 
     for _ in text_extractor.segment([staffs_file_paths], [gray_file_paths]):
         pass
+
+
 if __name__ == "__main__":
     main()

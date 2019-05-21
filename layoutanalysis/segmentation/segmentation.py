@@ -1,11 +1,11 @@
 from layoutanalysis.pixelclassifier.predictor import PCPredictor
 from pagesegmentation.lib.predictor import PredictSettings
 from layoutanalysis.removal.dummy_staff_line_removal import staff_removal
-from layoutanalysis.preprocessing.preprocessingUtil import extract_connected_components, vertical_runs
-from layoutanalysis.segmentation.musicRegion import MusicRegion, MusicRegions
+from layoutanalysis.preprocessing.util import extract_connected_components, vertical_runs
+from layoutanalysis.segmentation.music_region import MusicRegion, MusicRegions
 from layoutanalysis.datatypes.datatypes import ImageData
-from layoutanalysis.segmentation.segmentation_utility import alpha_shape, cc_cover
-from layoutanalysis.segmentation.segmentation_callback import SegmentationCallback, SegmentationDummyCallback
+from layoutanalysis.segmentation.util import alpha_shape, cc_cover
+from layoutanalysis.segmentation.callback import SegmentationCallback, SegmentationDummyCallback
 from layoutanalysis.preprocessing.binarization.ocropus_binarizer import binarize
 
 from PIL import Image
@@ -555,7 +555,7 @@ def polygons(edges: List[int]):
 if __name__ == "__main__":
     import pickle
     import os
-    from layoutanalysis.preprocessing.preprocessingUtil import vertical_runs
+    from layoutanalysis.preprocessing.util import vertical_runs
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     model_path = os.path.join(project_dir, 'demo/models/model')
     page_path = os.path.join(project_dir, 'demo/images/Graduel_de_leglise_de_Nevers-509.nrm.png')

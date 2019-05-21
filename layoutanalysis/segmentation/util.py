@@ -1,6 +1,6 @@
 from shapely.geometry import Polygon
 from scipy.spatial import Delaunay
-from layoutanalysis.preprocessing.preprocessingUtil import convert_2darray_to_1darray
+from layoutanalysis.preprocessing.util import convert_2darray_to_1darray
 import numpy as np
 from typing import List
 # import peakutils
