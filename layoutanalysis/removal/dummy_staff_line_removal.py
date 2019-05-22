@@ -13,7 +13,7 @@ def staff_removal(staffs_lines: List[List[List[int]]], img: np.ndarray, line_hei
         for ind, staff in enumerate(system):
             y, x = zip(*staff)
             f = interpolate.interp1d(x, y)
-            x_start, x_end = min(x), max(x)
+            x_start, x_end = int(min(x)), int(max(x))
             for i in range(x_start, x_end):
                 count = []
                 st_point = int(f(i))

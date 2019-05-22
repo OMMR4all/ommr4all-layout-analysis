@@ -43,8 +43,9 @@ def main():
 
     settings = SegmentationSettings(
         erode=args.erode,
-        processes = args.processes,
+        processes=args.processes,
         debug=args.debug,
+        weight_threshold=args.weight_threshold
     )
     text_extractor = Segmentator(settings)
 

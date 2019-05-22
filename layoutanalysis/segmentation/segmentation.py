@@ -42,7 +42,7 @@ class SegmentationSettings:
 
 
 class Segmentator:
-    def __init__(self, settings: SegmentationSettings, callback: SegmentationCallback):
+    def __init__(self, settings: SegmentationSettings, callback: SegmentationCallback = None):
         self.predictor = None
         self.settings = settings
         if self.settings.model:
@@ -164,7 +164,7 @@ class Segmentator:
                     func = interpolate.interp1d(x_list, y_list)
                     start = min(x_list)
                     end = max(x_list)
-                    values = list(range(start, end))
+                    values = list(range(int(start), int(end)))
                     fp = [func(x) for x in values]
                     d[r_ind].append(zip(fp, values))
             return d.values()

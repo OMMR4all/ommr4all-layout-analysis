@@ -58,7 +58,7 @@ def alpha_shape(points: np.ndarray, alpha: int, only_outer: bool = True):
 
 def alpha_shape_numpy(points: np.ndarray, alpha: float):
     from shapely import geometry
-    from shapely.ops import cascaded_union, polygonize
+    from shapely.ops import polygonize
     """
     Compute the alpha shape (concave hull) of a set
     of points.
@@ -125,7 +125,7 @@ def cc_cover(cc_list: List[List[int]], pred_list: List[List[int]], cover: float 
     return point_list
 
 
-def check_for_intersection(l1: List[int], l2: List[int]):
+def check_for_intersection(l1: List[List[int]], l2: List[List[int]]):
     p1 = l1[0]
     p2 = l1[1]
     p3 = l2[0]
