@@ -69,6 +69,10 @@ class Segmentator:
             self.callback.update_total_state()
 
     def segment_with_weight_image(self, staffs: List[List[List[int]]], img_data: np.ndarray):
+
+        if not staffs:
+            return []
+
         poly_dict = defaultdict(list)
         staffs.sort(key=lambda staff: staff[0][0][0])
 
