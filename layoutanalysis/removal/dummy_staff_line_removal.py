@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.interpolate import interpolate
 import math
 from typing import List
 
@@ -12,11 +11,10 @@ def staff_removal(staffs_lines: List[List[List[int]]], img: np.ndarray, line_hei
     for system in staffs_lines:
         for ind, staff in enumerate(system):
             y, x = zip(*staff)
-            f = interpolate.interp1d(x, y)
             x_start, x_end = int(min(x)), int(max(x))
-            for i in range(x_start, x_end):
+            st_points = np.round(np.interp(range(x_start, x_end), x, y)).astype(int)
+            for i, st_point in enumerate(st_points):
                 count = []
-                st_point = int(f(i))
                 if nimg[st_point][i] != 0:
                     for z in range(1, l2 + 1):
                         if nimg[st_point - z][i] == 0:

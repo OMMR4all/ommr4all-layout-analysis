@@ -20,7 +20,6 @@ import multiprocessing
 import tqdm
 from functools import partial
 from shapely.geometry import Polygon
-from scipy.interpolate import interpolate
 import math
 from scipy.ndimage import gaussian_filter
 import cv2
@@ -165,11 +164,8 @@ class Segmentator:
             for r_ind, staff in enumerate(music_regions.staffs):
                 for cc in staff:
                     y_list, x_list = zip(*cc)
-                    func = interpolate.interp1d(x_list, y_list)
-                    start = min(x_list)
-                    end = max(x_list)
-                    values = list(range(int(start), int(end)))
-                    fp = [func(x) for x in values]
+                    values = np.arange(int(min(x_list)), int(max(x_list)))
+                    fp = np.interp(values, x_list, y_list)
                     d[r_ind].append(zip(fp, values))
             return d.values()
 
