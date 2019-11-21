@@ -3,7 +3,7 @@ import math
 from typing import List
 
 
-def staff_removal(staffs_lines: List[List[List[int]]], img: np.ndarray, line_height: int):
+def staff_removal(staffs_lines: List[List[List[np.ndarray]]], img: np.ndarray, line_height: int):
     nimg = np.copy(img)
     h = nimg.shape[0]
     l2 = math.ceil(line_height / 2)
@@ -12,8 +12,9 @@ def staff_removal(staffs_lines: List[List[List[int]]], img: np.ndarray, line_hei
         for ind, staff in enumerate(system):
             y, x = zip(*staff)
             x_start, x_end = int(min(x)), int(max(x))
-            st_points = np.round(np.interp(range(x_start, x_end), x, y)).astype(int)
-            for i, st_point in enumerate(st_points):
+            x_range = range(x_start, x_end)
+            st_points = np.round(np.interp(x_range, x, y)).astype(int)
+            for i, st_point in zip(x_range, st_points):
                 count = []
                 if nimg[st_point][i] != 0:
                     for z in range(1, l2 + 1):

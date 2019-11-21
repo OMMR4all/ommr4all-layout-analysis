@@ -67,13 +67,22 @@ class Segmentator:
             yield self.segment_with_weight_image(i[0], i[1])
             self.callback.update_total_state()
 
-    def segment_with_weight_image(self, staffs: List[List[List[int]]], img_data: np.ndarray):
+    def segment_with_weight_image(self, staffs: List[List[List[np.ndarray]]], img_data: np.ndarray):
         poly_dict = defaultdict(list)
 
-        if not staffs:
+        if not staffs or len(staffs) == 0:
             return poly_dict
 
         staffs.sort(key=lambda staff: staff[0][0][0])
+
+        if len(staffs) == 1:
+            distance = (np.mean(np.array(staffs[0][-1])[:, 0]) - np.mean(np.array(staffs[0][0])[:, 0])) * 1.5
+        else:
+            distances = []
+            for s1, s2 in zip(staffs[:-1], staffs[1:]):
+                distances.append(-np.mean(np.array(s1[-1])[:, 0]) + np.mean(np.array(s2[0])[:, 0]))
+
+            distance = np.median(distances)
 
         img = np.array(Image.open(img_data.path)) / 255
         img_data.image = binarize(img)
@@ -86,7 +95,6 @@ class Segmentator:
         staff_img = draw_polygons(staff_polygons, staff_image)
         self.callback.update_current_page_state()
 
-        distance = vertical_runs(staff_img)[1]
         self.callback.update_current_page_state()
 
         music_regions = generate_music_region(staff_polygons, staffs, distance)
@@ -116,7 +124,7 @@ class Segmentator:
         cc_list_with_stats = extract_connected_components(((1 - processed_image) * 255).astype(np.uint8))
 
         # separate CCs in music and text
-        def segment_cc(cc_list_with_stats: List[List[List[int]]], weight_matrix: np.ndarray,
+        def segment_cc(cc_list_with_stats: List[List[List[np.ndarray]]], weight_matrix: np.ndarray,
                        avg_distance_between_systems: float, segment_capitals: bool = True,
                        threshold: float = 0.5):
             __cc_list = cc_list_with_stats[0]
@@ -137,7 +145,7 @@ class Segmentator:
             return __cc_list_new, __initials
 
         # Divide spaces into groups that reflect systems
-        def group_ccs(cc_list: List[List[int]], music_regions : MusicRegion):
+        def group_ccs(cc_list: List[List[np.ndarray]], music_regions : MusicRegion):
             d = defaultdict(list)
             for cc_ind, cc in enumerate(cc_list):
                 avg_cc_height = np.mean([cc[-1][0], cc[0][0]])
@@ -305,7 +313,7 @@ class Segmentator:
         return poly_dict
 
     # alternative algorithm, outdated
-    def segment_image(self, staffs: List[List[List[int]]], img_data: np.ndarray, region_prediction: np.ndarray):
+    def segment_image(self, staffs: List[List[List[np.ndarray]]], img_data: np.ndarray, region_prediction: np.ndarray):
 
         img = np.array(Image.open(img_data.path)) / 255
         img_data.image = binarize(img)
@@ -389,7 +397,7 @@ class Segmentator:
         return poly_dict
 
 
-def generate_music_region(staff_polygons: List[Polygon], staffs: List[List[List[int]]], distance: float):
+def generate_music_region(staff_polygons: List[Polygon], staffs: List[List[List[np.ndarray]]], distance: float):
     poly_avg_height = [x.centroid.y for x in staff_polygons]
 
     def cluster(data, max_gap):
@@ -487,7 +495,7 @@ def generate_polygons_from__ccs(cc, alpha: int = 15, buffer_size: float = 1.0):
     return polygons_paths
 
 
-def generate_polygon_from_staff(staff: List[List[int]]):
+def generate_polygon_from_staff(staff: List[List[np.ndarray]]):
     first_line = list(map(list, staff[0]))
 
     first_line[0][1] = first_line[0][1] + -5
