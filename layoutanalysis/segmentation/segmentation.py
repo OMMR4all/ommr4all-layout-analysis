@@ -1,5 +1,5 @@
+from ocr4all_pixel_classifier.lib.predictor import PredictSettings
 from layoutanalysis.pixelclassifier.predictor import PCPredictor
-from pagesegmentation.lib.predictor import PredictSettings
 from layoutanalysis.removal.dummy_staff_line_removal import staff_removal
 from layoutanalysis.preprocessing.util import extract_connected_components, vertical_runs
 from layoutanalysis.segmentation.music_region import MusicRegion, MusicRegions

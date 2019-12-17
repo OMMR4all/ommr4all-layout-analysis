@@ -1,5 +1,5 @@
-from pagesegmentation.lib.predictor import Predictor, PredictSettings
-from pagesegmentation.lib.dataset import DatasetLoader, SingleData
+from ocr4all_pixel_classifier.lib.predictor import Predictor, PredictSettings
+from ocr4all_pixel_classifier.lib.dataset import DatasetLoader, SingleData
 import numpy as np
 from typing import Generator
 from skimage.transform import resize
