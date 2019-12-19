@@ -2,7 +2,7 @@ numpy
 scipy
 scikit-image
 tqdm
-opencv-python
+opencv-python-headless>=4,!=4.1.2
 dataclasses
 pillow
 matplotlib
