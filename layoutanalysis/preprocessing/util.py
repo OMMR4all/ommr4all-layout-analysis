@@ -3,7 +3,7 @@ from collections import defaultdict
 import numpy as np
 from scipy.signal import medfilt2d
 from itertools import tee
-from scipy.ndimage.filters import convolve1d
+from scipy.ndimage import convolve1d
 
 
 def extract_connected_components(image):

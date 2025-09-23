@@ -10,7 +10,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from itertools import chain
 import numpy as np
-from scipy.ndimage.morphology import binary_erosion, binary_dilation
+from scipy.ndimage import binary_erosion, binary_dilation, gaussian_filter
 from dataclasses import dataclass
 from collections import defaultdict
 from skimage.draw import polygon
@@ -19,7 +19,6 @@ import tqdm
 from functools import partial
 from shapely.geometry import Polygon
 import math
-from scipy.ndimage import gaussian_filter
 import cv2
 
 from typing import List

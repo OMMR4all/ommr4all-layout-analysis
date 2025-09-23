@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.ndimage import filters, interpolation, morphology
+from scipy.ndimage import zoom, percentile_filter, binary_dilation, rotate, gaussian_filter
 import scipy.stats as stats
 
 
@@ -13,7 +13,7 @@ def estimate_skew(flat, bignore=0.1, maxskew=2, skewsteps=8):
     ma = maxskew
     ms = int(2*maxskew*skewsteps)
     angle = estimate_skew_angle(est, np.linspace(-ma, ma, ms+1))
-    flat = interpolation.rotate(flat, angle, mode='constant', reshape=0)
+    flat = rotate(flat, angle, mode='constant', reshape=False)
     flat = np.amax(flat)-flat
     return flat, angle
 
@@ -21,23 +21,23 @@ def estimate_skew(flat, bignore=0.1, maxskew=2, skewsteps=8):
 def estimate_skew_angle(image, angles):
     estimates = []
     for a in angles:
-        v = np.mean(interpolation.rotate(image, a, order=0, mode='constant'), axis=1)
+        v = np.mean(rotate(image, a, order=0, mode='constant'), axis=1)
         v = np.var(v)
         estimates.append((v, a))
     _, a = max(estimates)
     return a
 
 
-def estimate_local_whitelevel(image, zoom=0.5, perc=80, range=20, debug=0):
+def estimate_local_whitelevel(image, zoom_val=0.5, perc=80, range=20, debug=0):
     '''flatten it by estimating the local whitelevel
     zoom for page background estimation, smaller=faster, default: %(default)s
     percentage for filters, default: %(default)s
     range for filters, default: %(default)s
     '''
-    m = interpolation.zoom(image, zoom)
-    m = filters.percentile_filter(m, perc, size=(range, 2))
-    m = filters.percentile_filter(m, perc, size=(2, range))
-    m = interpolation.zoom(m, 1.0/zoom)
+    m = zoom(image, zoom_val)
+    m = percentile_filter(m, perc, size=(range, 2))
+    m = percentile_filter(m, perc, size=(2, range))
+    m = zoom(m, 1.0/zoom_val)
     w, h = np.minimum(np.array(image.shape), np.array(m.shape))
     flat = np.clip(image[:w, :h]-m[:w, :h]+1, 0, 1)
     return flat
@@ -58,11 +58,11 @@ def estimate_thresholds(flat, bignore=0.1, escale=1.0, lo=5, hi=90, debug=0):
         # significant variance; this makes the percentile
         # based low and high estimates more reliable
         e = escale
-        v = est-filters.gaussian_filter(est, e*20.0)
-        v = filters.gaussian_filter(v**2, e*20.0)**0.5
+        v = est-gaussian_filter(est, e * 20.0)
+        v = gaussian_filter(v**2, e*20.0) ** 0.5
         v = (v > 0.3*np.amax(v))
-        v = morphology.binary_dilation(v, structure=np.ones((int(e*50), 1)))
-        v = morphology.binary_dilation(v, structure=np.ones((1, int(e*50))))
+        v = binary_dilation(v, structure=np.ones((int(e*50), 1)))
+        v = binary_dilation(v, structure=np.ones((1, int(e*50))))
         est = est[v]
     lo = stats.scoreatpercentile(est.ravel(), lo)
     hi = stats.scoreatpercentile(est.ravel(), hi)
