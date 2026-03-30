@@ -1,0 +1,17 @@
+[project]
+name = "ommr4all-layout-analysis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dataclasses>=0.8",
+    "matplotlib>=3.10.8",
+    "numpy>=2.4.4",
+    "opencv-python-headless>=4,!=4.1.2.30",
+    "pillow>=12.1.1",
+    "scikit-image>=0.26.0",
+    "scipy>=1.17.1",
+    "shapely>=2.1.2",
+    "tqdm>=4.67.3",
+]
