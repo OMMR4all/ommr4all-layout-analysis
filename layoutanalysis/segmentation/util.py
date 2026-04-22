@@ -36,7 +36,7 @@ def alpha_shape(points: np.ndarray, alpha: int, only_outer: bool = True):
     edges = set()
     # Loop over triangles:
     # ia, ib, ic = indices of corner points of the triangle
-    for ia, ib, ic in tri.vertices:
+    for ia, ib, ic in tri.simplices:
         pa = points[ia]
         pb = points[ib]
         pc = points[ic]
@@ -75,7 +75,7 @@ def alpha_shape_numpy(points: np.ndarray, alpha: float):
 
     coords = np.array(points)
     tri = Delaunay(coords)
-    triangles = coords[tri.vertices]
+    triangles = coords[tri.simplices]
     a = ((triangles[:, 0, 0] - triangles[:, 1, 0]) ** 2 + (triangles[:, 0, 1] - triangles[:, 1, 1]) ** 2) ** 0.5
     b = ((triangles[:, 1, 0] - triangles[:, 2, 0]) ** 2 + (triangles[:, 1, 1] - triangles[:, 2, 1]) ** 2) ** 0.5
     c = ((triangles[:, 2, 0] - triangles[:, 0, 0]) ** 2 + (triangles[:, 2, 1] - triangles[:, 0, 1]) ** 2) ** 0.5
