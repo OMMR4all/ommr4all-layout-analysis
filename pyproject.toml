@@ -9,7 +9,7 @@ dependencies = [
     "matplotlib>=3.10.8",
     "numpy>=2.4.4",
     "opencv-python-headless>=4,!=4.1.2.30",
-    "pillow>=12.1.1",
+    "pillow>=13.0.0",
     "scikit-image>=0.26.0",
     "scipy>=1.17.1",
     "shapely>=2.1.2",
